@@ -1,0 +1,11 @@
+PRODUCT_BUNDLE_IDENTIFIER = com.ehallmark.electrswatch
+IPHONEOS_DEPLOYMENT_TARGET = 17.0
+SWIFT_VERSION = 6.0
+SWIFT_STRICT_CONCURRENCY = complete
+TARGETED_DEVICE_FAMILY = 1
+CODE_SIGN_STYLE = Automatic
+CODE_SIGN_IDENTITY[sdk=iphonesimulator*] = -
+ENABLE_USER_SCRIPT_SANDBOXING = YES
+// For a real iPhone: create Config/Signing.local.xcconfig (ignored by git) containing
+//   DEVELOPMENT_TEAM = YOUR_TEAM_ID
+#include? "Signing.local.xcconfig"

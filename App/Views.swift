@@ -1,0 +1,372 @@
+import SwiftUI
+import WatchCore
+
+/// Sheets present above the root view, so each one needs its own cover.
+struct PrivacyCovered: ViewModifier {
+    @Environment(\.scenePhase) private var scenePhase
+
+    func body(content: Content) -> some View {
+        content.overlay {
+            // Also what iOS captures for the app switcher.
+            if scenePhase != .active { PrivacyCover() }
+        }
+    }
+}
+
+struct PrivacyCover: View {
+    var body: some View {
+        ZStack {
+            Color(.systemBackground).ignoresSafeArea()
+            Image(systemName: "lock.fill").font(.largeTitle).foregroundStyle(.secondary)
+        }
+        .accessibilityIdentifier("privacy.cover")
+    }
+}
+
+struct RootView: View {
+    let model: AppModel
+
+    var body: some View {
+        if let vault = model.vault {
+            if vault.onion == nil {
+                PairingView(model: model, vault: vault)
+            } else {
+                HomeView(model: model, vault: vault)
+            }
+        } else if model.vaultExists {
+            LockedView(model: model)
+        } else {
+            WelcomeView(model: model)
+        }
+    }
+}
+
+private struct WelcomeView: View {
+    let model: AppModel
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Spacer()
+            Image(systemName: "eye").font(.system(size: 56)).foregroundStyle(.tint)
+            Text("Electrs Watch").font(.largeTitle.bold())
+            Text("See the balance of addresses you choose, from your own server, over Tor. This app holds no wallet keys and can't spend.")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+            if let message = model.unlockFailure {
+                Text(message).foregroundStyle(.red).multilineTextAlignment(.center).accessibilityIdentifier("setup.error")
+            }
+            Spacer()
+            Button("Set Up") { Task { await model.beginSetup() } }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .accessibilityIdentifier("setup.start")
+        }
+        .padding(24)
+    }
+}
+
+private struct LockedView: View {
+    let model: AppModel
+    @State private var confirmErase = false
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Spacer()
+            Image(systemName: "lock.fill").font(.system(size: 48)).foregroundStyle(.secondary)
+            if let message = model.unlockFailure {
+                Text(message).foregroundStyle(.red).multilineTextAlignment(.center).accessibilityIdentifier("lock.error")
+            }
+            if model.offerErase {
+                Button("Erase and Start Over", role: .destructive) { confirmErase = true }
+            }
+            Spacer()
+            Button("Unlock with Face ID") { Task { await model.unlock() } }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .accessibilityIdentifier("lock.unlock")
+        }
+        .padding(24)
+        .confirmationDialog("Erase everything on this phone?", isPresented: $confirmErase, titleVisibility: .visible) {
+            Button("Erase", role: .destructive) { model.eraseEverything() }
+        } message: {
+            Text("You'll need to add a new key to your node. Your coins aren't affected.")
+        }
+    }
+}
+
+private struct PairingView: View {
+    let model: AppModel
+    let vault: VaultContents
+    @State private var onionText = ""
+    @State private var invalid = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text(vault.clientKey.authorizedClientLine)
+                        .font(.footnote.monospaced())
+                        .textSelection(.enabled)
+                        .accessibilityIdentifier("pair.publicKey")
+                    ShareLink(item: vault.clientKey.authorizedClientLine) {
+                        Label("Send to Mac", systemImage: "square.and.arrow.up")
+                    }
+                } header: {
+                    Text("1. Add this public key to your node")
+                } footer: {
+                    Text("This is public, so it's safe to send. The private half stays on this phone. Follow docs/NODE-SETUP.md.")
+                }
+                Section {
+                    TextField("your-address.onion", text: $onionText, axis: .vertical)
+                        .font(.footnote.monospaced())
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .accessibilityIdentifier("pair.onion")
+                    if invalid {
+                        Text("That isn't a v3 onion address.").foregroundStyle(.red).accessibilityIdentifier("pair.invalid")
+                    }
+                    Button("Continue") { invalid = !model.setOnion(onionText) }
+                        .disabled(onionText.isEmpty)
+                        .accessibilityIdentifier("pair.continue")
+                } header: {
+                    Text("2. Enter your server's onion address")
+                }
+            }
+            .navigationTitle("Connect")
+        }
+    }
+}
+
+private struct HomeView: View {
+    let model: AppModel
+    let vault: VaultContents
+    @State private var showAdd = false
+    @State private var showSettings = false
+
+    var body: some View {
+        NavigationStack {
+            List {
+                totalSection
+                addressesSection
+            }
+            .privacySensitive()
+            .navigationTitle("Balance")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { showSettings = true } label: { Image(systemName: "gearshape") }
+                        .accessibilityLabel("Settings")
+                        .accessibilityIdentifier("home.settings")
+                }
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button { model.hideAmounts.toggle() } label: {
+                        Image(systemName: model.hideAmounts ? "eye.slash" : "eye")
+                    }
+                    .accessibilityLabel(model.hideAmounts ? "Show amounts" : "Hide amounts")
+                    .accessibilityIdentifier("home.hide")
+                    Button { showAdd = true } label: { Image(systemName: "plus") }
+                        .accessibilityLabel("Add address")
+                        .accessibilityIdentifier("home.add")
+                }
+            }
+            .safeAreaInset(edge: .bottom) { statusBar }
+            .sheet(isPresented: $showAdd) { AddAddressView(model: model) }
+            .sheet(isPresented: $showSettings) { SettingsView(model: model, vault: vault) }
+        }
+    }
+
+    private func amount(_ sats: Int64, signed: Bool = false) -> String {
+        model.hideAmounts ? "••••••" : BitcoinAmount.format(sats: sats, signed: signed)
+    }
+
+    private var totalSection: some View {
+        Section {
+            if let snapshot = model.snapshot {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(amount(snapshot.totalConfirmedSats)) BTC")
+                        .font(.title2.monospacedDigit().bold())
+                        .accessibilityIdentifier("home.total")
+                    if snapshot.totalUnconfirmedSats != 0 {
+                        Text("Pending \(amount(snapshot.totalUnconfirmedSats, signed: true))")
+                            .font(.subheadline.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("home.pending")
+                    }
+                    Text("Block \(String(snapshot.tip.height)), checked \(snapshot.fetchedAt.formatted(date: .omitted, time: .shortened))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("home.tip")
+                }
+            } else {
+                Text("Not checked yet").foregroundStyle(.secondary)
+            }
+        } footer: {
+            Text("This only covers the addresses below, so it isn't your wallet total. Change from a spend usually goes to a new address: add it here.")
+        }
+    }
+
+    private var addressesSection: some View {
+        Section("Addresses") {
+            ForEach(vault.watched) { item in
+                let row = model.snapshot?.rows.first { $0.watched == item }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.label.isEmpty ? "Address" : item.label).font(.headline)
+                    Text(item.address).font(.caption2.monospaced()).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
+                    if let row {
+                        Text("\(amount(row.balance.confirmedSats)) BTC, \(row.history.transactionCount) tx")
+                            .font(.subheadline.monospacedDigit())
+                            .accessibilityIdentifier("row.\(item.label)")
+                    }
+                }
+            }
+            .onDelete { offsets in
+                offsets.map { vault.watched[$0] }.forEach(model.remove)
+            }
+            if vault.watched.isEmpty {
+                Text("Tap + to add an address.").foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var statusBar: some View {
+        VStack(spacing: 8) {
+            if let failure = model.failure {
+                Text(failure.message)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .accessibilityIdentifier("home.error")
+            }
+            if model.activity == .idle {
+                Button(model.failure == nil ? "Refresh" : "Retry") { model.refresh() }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("home.refresh")
+            } else {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text(activityText).font(.footnote).accessibilityIdentifier("home.activity")
+                }
+            }
+        }
+        .padding()
+        .frame(maxWidth: .infinity)
+        .background(.bar)
+    }
+
+    private var activityText: String {
+        switch model.activity {
+        case .idle: ""
+        case .startingTor(let percent): "Starting Tor, \(percent)%"
+        case .connecting: "Connecting to your server"
+        case .refreshing: "Checking addresses"
+        }
+    }
+}
+
+private struct AddAddressView: View {
+    let model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var text = ""
+    @State private var label = ""
+    @State private var problem: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("bc1...", text: $text, axis: .vertical)
+                        .font(.footnote.monospaced())
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .accessibilityIdentifier("add.address")
+                    TextField("Label (optional)", text: $label)
+                        .autocorrectionDisabled()
+                        .accessibilityIdentifier("add.label")
+                } footer: {
+                    if let problem {
+                        Text(problem).foregroundStyle(.red).accessibilityIdentifier("add.problem")
+                    } else {
+                        Text("Enter a single address. Don't enter an xpub or a seed phrase.")
+                    }
+                }
+            }
+            .navigationTitle("Add Address")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }.disabled(text.isEmpty).accessibilityIdentifier("add.save")
+                }
+            }
+        }
+        .modifier(PrivacyCovered())
+    }
+
+    private func save() {
+        do {
+            let address = try BitcoinAddress(text)
+            if model.add(address: address, label: label) {
+                dismiss()
+            } else {
+                problem = "Couldn't save this address."
+            }
+        } catch AddressError.notMainnet {
+            problem = "That's a testnet address. This app only supports mainnet."
+        } catch AddressError.unsupportedWitnessVersion {
+            problem = "This address type isn't supported yet."
+        } catch {
+            problem = "That isn't a valid Bitcoin address."
+        }
+    }
+}
+
+private struct SettingsView: View {
+    let model: AppModel
+    let vault: VaultContents
+    @Environment(\.dismiss) private var dismiss
+    @State private var confirmErase = false
+    @State private var newOnion = ""
+    @State private var onionInvalid = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Server") {
+                    Text(vault.onion?.hostname ?? "").font(.footnote.monospaced())
+                    TextField("New onion address", text: $newOnion, axis: .vertical)
+                        .font(.footnote.monospaced())
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    if onionInvalid {
+                        Text("That isn't a v3 onion address.").foregroundStyle(.red)
+                    }
+                    Button("Change Address") {
+                        onionInvalid = !model.setOnion(newOnion)
+                        if !onionInvalid { newOnion = "" }
+                    }
+                    .disabled(newOnion.isEmpty)
+                }
+                Section("This phone's public key") {
+                    Text(vault.clientKey.authorizedClientLine).font(.footnote.monospaced()).textSelection(.enabled)
+                    ShareLink(item: vault.clientKey.authorizedClientLine) {
+                        Label("Send to Mac", systemImage: "square.and.arrow.up")
+                    }
+                }
+                Section {
+                    Button("Lock Now") { dismiss(); model.lock() }
+                    Button("Erase Everything", role: .destructive) { confirmErase = true }
+                } footer: {
+                    Text("Erasing removes the key and your addresses from this phone. Your coins aren't affected. Also remove this phone's file from the node.")
+                }
+            }
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+            }
+            .confirmationDialog("Erase everything on this phone?", isPresented: $confirmErase, titleVisibility: .visible) {
+                Button("Erase", role: .destructive) { dismiss(); model.eraseEverything() }
+            }
+        }
+        .modifier(PrivacyCovered())
+    }
+}

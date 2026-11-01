@@ -1,0 +1,13 @@
+.DS_Store
+.build/
+.swiftpm/
+DerivedData/
+build/
+xcuserdata/
+*.xcuserstate
+*.xcresult
+Config/Signing.local.xcconfig
+# Never commit real connection details or keys.
+*.auth
+*.auth_private
+hs_ed25519_*
