@@ -1,4 +1,9 @@
+// The bundle ID stays as is when the display name changes: signing and Keychain data depend on it.
 PRODUCT_BUNDLE_IDENTIFIER = com.ehallmark.electrswatch
+INFOPLIST_KEY_CFBundleDisplayName = Nightwatch
+// Always dark, including the launch screen and sheets.
+INFOPLIST_KEY_UIUserInterfaceStyle = Dark
+ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon
 IPHONEOS_DEPLOYMENT_TARGET = 17.0
 SWIFT_VERSION = 6.0
 SWIFT_STRICT_CONCURRENCY = complete

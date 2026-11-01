@@ -11,6 +11,7 @@ struct ElectrsWatchApp: App {
         WindowGroup {
             RootView(model: model)
                 .modifier(PrivacyCovered())
+                .tint(Theme.ice)
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .background { model.lock() }
                 }

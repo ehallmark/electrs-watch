@@ -40,8 +40,9 @@
   considering if that's in your threat model.
 - **R5: Your own screenshots.** iOS doesn't let apps block these.
 - **R6: Tor client auth uses x25519,** which isn't post-quantum. This matches Tor itself, and the data at stake is privacy, not funds.
-- **R7: Signing depends on you.** The app is installed from your own Mac using your Apple developer account, with no App Store review. A free account's
-  install expires in 7 days; a paid one lasts a year. Nothing is distributed publicly.
+- **R7: Signing depends on you.** The app is installed from your own Mac using your paid Apple developer account, with no App Store review. Nothing is
+  distributed publicly. `scripts/release-build.sh` makes a Release Testing (Ad Hoc) build for registered devices, which a debugger can't attach to. When
+  its profile expires the app stops opening, so rebuild and install over it. The script prints the expiry date.
 
 ## Updates
 

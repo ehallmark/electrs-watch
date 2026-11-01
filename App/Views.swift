@@ -16,8 +16,11 @@ struct PrivacyCovered: ViewModifier {
 struct PrivacyCover: View {
     var body: some View {
         ZStack {
-            Color(.systemBackground).ignoresSafeArea()
-            Image(systemName: "lock.fill").font(.largeTitle).foregroundStyle(.secondary)
+            Color.black.ignoresSafeArea()
+            VStack(spacing: 16) {
+                Crest()
+                Text(Theme.lockedLine).font(.headline).foregroundStyle(.secondary)
+            }
         }
         .accessibilityIdentifier("privacy.cover")
     }
@@ -47,8 +50,9 @@ private struct WelcomeView: View {
     var body: some View {
         VStack(spacing: 20) {
             Spacer()
-            Image(systemName: "eye").font(.system(size: 56)).foregroundStyle(.tint)
-            Text("Electrs Watch").font(.largeTitle.bold())
+            Crest()
+            Text("Nightwatch").font(.largeTitle.bold())
+            Text(Theme.tagline).font(.headline).italic().foregroundStyle(.secondary)
             Text("See the balance of addresses you choose, from your own server, over Tor. This app holds no wallet keys and can't spend.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
@@ -56,7 +60,7 @@ private struct WelcomeView: View {
                 Text(message).foregroundStyle(.red).multilineTextAlignment(.center).accessibilityIdentifier("setup.error")
             }
             Spacer()
-            Button("Set Up") { Task { await model.beginSetup() } }
+            Button("Take the Oath") { Task { await model.beginSetup() } }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .accessibilityIdentifier("setup.start")
@@ -72,7 +76,8 @@ private struct LockedView: View {
     var body: some View {
         VStack(spacing: 20) {
             Spacer()
-            Image(systemName: "lock.fill").font(.system(size: 48)).foregroundStyle(.secondary)
+            Crest()
+            Text(Theme.lockedLine).font(.headline).italic().foregroundStyle(.secondary)
             if let message = model.unlockFailure {
                 Text(message).foregroundStyle(.red).multilineTextAlignment(.center).accessibilityIdentifier("lock.error")
             }
@@ -150,7 +155,7 @@ private struct HomeView: View {
                 addressesSection
             }
             .privacySensitive()
-            .navigationTitle("Balance")
+            .navigationTitle("The Watch")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { showSettings = true } label: { Image(systemName: "gearshape") }
@@ -222,7 +227,7 @@ private struct HomeView: View {
                 offsets.map { vault.watched[$0] }.forEach(model.remove)
             }
             if vault.watched.isEmpty {
-                Text("Tap + to add an address.").foregroundStyle(.secondary)
+                Text("Nothing on watch yet. Tap + to add an address.").foregroundStyle(.secondary)
             }
         }
     }

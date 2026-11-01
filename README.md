@@ -1,5 +1,8 @@
 # electrs-watch
 
+**Nightwatch** on the home screen, with a Night's Watch theme for personal use. The theme uses *Game of Thrones* references, so
+replace it before any public release. `electrs-watch` stays as the repo and project name, and the bundle ID doesn't change.
+
 A small iPhone app that shows the balance of Bitcoin addresses you choose, using your own electrs
 server over a private Tor onion service.
 
