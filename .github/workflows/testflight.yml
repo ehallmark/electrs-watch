@@ -1,0 +1,81 @@
+# Uploads a fresh TestFlight build each month, so one is always within its 90 days.
+# These secrets can put a build on the owner's phone, so this workflow has no pull
+# request trigger, no write access, and no third-party actions. See docs/RELEASING.md.
+name: TestFlight
+
+on:
+  schedule:
+    - cron: "17 9 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: testflight
+  cancel-in-progress: false
+
+jobs:
+  upload:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      # actions/checkout v7.0.1, pinned to the exact commit.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Run tests
+        run: scripts/test.sh
+
+      - name: Install signing material
+        env:
+          DISTRIBUTION_P12: ${{ secrets.APPLE_DISTRIBUTION_P12 }}
+          DISTRIBUTION_P12_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_P12_PASSWORD }}
+          TESTFLIGHT_PROFILE: ${{ secrets.TESTFLIGHT_PROFILE }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        run: |
+          umask 077
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password="$(openssl rand -hex 32)"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+
+          p12="$RUNNER_TEMP/distribution.p12"
+          printf '%s' "$DISTRIBUTION_P12" | base64 -D > "$p12"
+          security import "$p12" -k "$keychain" -P "$DISTRIBUTION_P12_PASSWORD" -T /usr/bin/codesign -f pkcs12
+          rm -f "$p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+
+          profile="$RUNNER_TEMP/testflight.mobileprovision"
+          printf '%s' "$TESTFLIGHT_PROFILE" | base64 -D > "$profile"
+          decoded="$RUNNER_TEMP/profile.plist"
+          security cms -D -i "$profile" > "$decoded"
+          uuid="$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$decoded")"
+          name="$(/usr/libexec/PlistBuddy -c 'Print :Name' "$decoded")"
+          for dir in "$HOME/Library/MobileDevice/Provisioning Profiles" "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"; do
+            mkdir -p "$dir"
+            cp "$profile" "$dir/$uuid.mobileprovision"
+          done
+          echo "PROFILE_NAME=$name" >> "$GITHUB_ENV"
+
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          printf '%s\n' "$ASC_KEY_P8" > "$HOME/.appstoreconnect/private_keys/AuthKey_$ASC_KEY_ID.p8"
+
+      - name: Build, check and upload
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: scripts/testflight-build.sh --upload
+
+      - name: Remove signing material
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
+          rm -rf "$HOME/.appstoreconnect" "$RUNNER_TEMP/profile.plist" "$RUNNER_TEMP/testflight.mobileprovision"
+          rm -f "$HOME/Library/MobileDevice/Provisioning Profiles/"*.mobileprovision
+          rm -f "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles/"*.mobileprovision

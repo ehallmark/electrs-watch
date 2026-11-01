@@ -40,9 +40,10 @@
   considering if that's in your threat model.
 - **R5: Your own screenshots.** iOS doesn't let apps block these.
 - **R6: Tor client auth uses x25519,** which isn't post-quantum. This matches Tor itself, and the data at stake is privacy, not funds.
-- **R7: Signing depends on you.** The app is installed from your own Mac using your paid Apple developer account, with no App Store review. Nothing is
-  distributed publicly. `scripts/release-build.sh` makes a Release Testing (Ad Hoc) build for registered devices, which a debugger can't attach to. When
-  its profile expires the app stops opening, so rebuild and install over it. The script prints the expiry date.
+- **R7: Signing and CI can ship to your phone.** A monthly GitHub Action uploads to TestFlight for internal testing, so Developer Mode can stay off and
+  nothing is distributed publicly. Apple holds each build, which contains no addresses, keys or onion address. Anyone holding the CI secrets or able to push
+  to `main` could produce a build that reads the app's Keychain item after Face ID unlock. Automatic Updates stay off for this app, so a build only reaches
+  the phone when you tap Update. See `RELEASING.md`.
 
 ## Updates
 

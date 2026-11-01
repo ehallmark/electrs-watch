@@ -6,7 +6,7 @@
 | M2 | Core logic (`WatchCore`) | Unit tests pass, including published BIP test vectors and hostile server replies | Done: 49 tests |
 | M3 | App + embedded Tor | Builds and boots in the simulator, Tor bootstraps | Done |
 | M4 | Simulator E2E | Over the real Tor network: refused without key, works with key, correct balances, no non-allowlisted methods | Done on 2026-11-01, against a mock server |
-| M5 | Real iPhone | Release Testing build installed; Face ID, background lock, file protection, keyboard block all verified | Needs your iPhone |
+| M5 | Real iPhone | TestFlight build installed with Developer Mode off; Face ID, background lock, file protection, keyboard block all verified | Needs your iPhone |
 | M6 | Real node | Connects to real electrs after sync; balance matches Electrum on the Mac | Needs node sync |
 | M7 | Optional hardening | Header PoW checks; build Tor from source; audit script watches the new onion | Later |
 
@@ -28,8 +28,9 @@ The E2E mock server computes script hashes with its own Python code, so a mistak
 
 ## M5 checklist (real iPhone)
 
-- [ ] `scripts/release-build.sh --install "<device>"` passes its checks, and its expiry date is about a year away
-- [ ] With Developer Mode turned off and the phone restarted, the app still opens
+- [ ] The TestFlight workflow uploads a build, following `RELEASING.md`
+- [ ] With Developer Mode turned off and the phone restarted, the TestFlight copy opens (an Ad Hoc copy appears not to, which is why this project moved to TestFlight)
+- [ ] Installing the TestFlight copy over the Ad Hoc copy keeps the app's Keychain data
 - [ ] First launch asks for Face ID when saving and when reopening
 - [ ] A failed Face ID match says to try again and doesn't offer to erase
 - [ ] Enrolling a new face makes the data unreadable and offers a clean reset
