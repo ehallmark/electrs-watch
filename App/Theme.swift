@@ -6,7 +6,7 @@ enum Theme {
     /// Cold blue from the Wall. Dark enough for white button text and for links on black.
     static let ice = Color(red: 0x2F / 255, green: 0x86 / 255, blue: 0xB3 / 255)
     static let tagline = "And now my watch begins."
-    static let lockedLine = "Night gathers."
+    static let lockedLine = "Winter is coming."
 }
 
 /// The app icon as an image inside the app.

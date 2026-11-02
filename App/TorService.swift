@@ -24,6 +24,7 @@ actor TorService {
     private var latestStartedSession = -1
     /// Which onion's key Tor currently holds, so a lock can always remove it.
     private var loadedOnion: OnionAddress?
+    private var lastNewnym: Date?
 
     nonisolated var socksPath: String { socketDirectory.appendingPathComponent("s").path }
     private nonisolated var controlPath: String { socketDirectory.appendingPathComponent("c").path }
@@ -77,8 +78,17 @@ actor TorService {
         try await run(client) { try await $0.addClientAuth(onion: onion, key: key) }
     }
 
+    /// Makes Tor fetch the service's info again. Call before `addClientAuth`, never after: Tor clears
+    /// keys added without the Permanent flag along with the cache (`hs_client_purge_state` in Tor's source).
+    /// Tor delays a NEWNYM sent within 10 seconds of the last one, and a delayed one could clear a key
+    /// added in the meantime. So this waits out that window, and Tor then acts on it before the next command.
     func forgetCachedServices() async {
         guard let client = control else { return }
+        if let lastNewnym {
+            let wait = 11 - Date().timeIntervalSince(lastNewnym)
+            if wait > 0 { try? await Task.sleep(for: .seconds(wait)) }
+        }
+        lastNewnym = Date()
         _ = try? await run(client) { try await $0.forgetCachedServices() }
     }
 
@@ -155,7 +165,7 @@ actor TorService {
     }
 
     private nonisolated func arguments() -> [String] {
-        [
+        var arguments = [
             "--ignore-missing-torrc", "--allow-missing-torrc",
             "--DataDirectory", dataDirectory.path,
             "--ClientOnly", "1",
@@ -173,6 +183,12 @@ actor TorService {
             "--GeoIPFile", "",
             "--GeoIPv6File", "",
         ]
+#if targetEnvironment(simulator)
+        // For the E2E test only, so a slow connection can be explained. SafeLogging keeps addresses out.
+        // Phone builds never log to a file.
+        arguments += ["--Log", "notice file \(socketDirectory.appendingPathComponent("tor.log").path)"]
+#endif
+        return arguments
     }
 
     private nonisolated func prepareDirectories() throws {

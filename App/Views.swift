@@ -292,6 +292,15 @@ private struct HomeView: View {
                     ProgressView()
                     Text(activityText).font(.footnote).accessibilityIdentifier("home.activity")
                 }
+                if let startedAt = model.refreshStartedAt {
+                    // Ticks every second, so it's clear the app is still working and when it started over.
+                    TimelineView(.periodic(from: startedAt, by: 1)) { context in
+                        Text(progressDetail(since: startedAt, now: context.date))
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("home.progress")
+                    }
+                }
                 hardRefreshButton
             }
         }
@@ -304,16 +313,26 @@ private struct HomeView: View {
     private var hardRefreshButton: some View {
         Button("Hard Refresh") { model.hardRefresh() }
             .buttonStyle(.bordered)
+            .sensoryFeedback(.impact, trigger: model.hardRefreshTaps)
             .accessibilityIdentifier("home.hardRefresh")
     }
 
     private var activityText: String {
-        switch model.activity {
+        let text = switch model.activity {
         case .idle: ""
         case .startingTor(let percent): "Starting Tor, \(percent)%"
+        case .resetting: "Resetting Tor"
         case .connecting: "Connecting to your server"
+        case .waitingToRetry: "Didn't connect, trying again shortly"
         case .refreshing: "Checking addresses"
         }
+        return model.isHardRefresh ? "Hard refresh: \(text)" : text
+    }
+
+    private func progressDetail(since start: Date, now: Date) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(start)))
+        let elapsed = String(format: "%d:%02d", seconds / 60, seconds % 60)
+        return "Attempt \(model.attempt), \(elapsed) elapsed"
     }
 }
 

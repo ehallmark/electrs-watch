@@ -209,8 +209,8 @@ final class EndToEndTests: XCTestCase {
         element(app, "home.settings").tap()
         XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 10))
         app.swipeUp()
-        XCTAssertTrue(element(app, "settings.log.connected").waitForExistence(timeout: 10), "Connection log missing")
-        XCTAssertTrue(element(app, "settings.log.connectedAfterReset").exists, "Recovery didn't go through a reset")
+        // Earlier connections may also have needed a reset, so only the reset row is certain.
+        XCTAssertTrue(element(app, "settings.log.connectedAfterReset").waitForExistence(timeout: 10), "Recovery didn't go through a reset")
         app.buttons["Done"].tap()
 
         // HARD REFRESH: starts over from scratch, and reconnects.
@@ -218,6 +218,8 @@ final class EndToEndTests: XCTestCase {
         XCTAssertTrue(hardRefresh.waitForExistence(timeout: 10), "No Hard Refresh button")
         hardRefresh.tap()
         XCTAssertTrue(element(app, "home.stale").waitForExistence(timeout: 5), "Hard refresh didn't start an update")
+        XCTAssertTrue(element(app, "home.activity").label.hasPrefix("Hard refresh: "), "Screen didn't say a hard refresh is running")
+        XCTAssertTrue(element(app, "home.progress").label.hasPrefix("Attempt 1, 0:0"), "Progress didn't restart at zero")
         // Tapping again mid-attempt must abandon that attempt cleanly, not stack a second one.
         if hardRefresh.waitForExistence(timeout: 5) { hardRefresh.tap() }
         let hardDeadline = Date().addingTimeInterval(240)

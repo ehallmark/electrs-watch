@@ -9,7 +9,9 @@ final class AppModel {
     enum Activity: Equatable {
         case idle
         case startingTor(Int)
+        case resetting
         case connecting
+        case waitingToRetry
         case refreshing
     }
 
@@ -43,7 +45,12 @@ final class AppModel {
     private var needsNetworkReset = false
     private enum Reset { case none, automatic, hard }
     private var resetBeforeThisConnection = Reset.none
-    private var refreshStartedAt: Date?
+    /// For the screen: when this update started, which attempt is running, and whether it's a hard refresh.
+    private(set) var refreshStartedAt: Date?
+    private(set) var attempt = 1
+    private(set) var isHardRefresh = false
+    /// Goes up on each Hard Refresh tap, so the screen can confirm it with a tap of feedback.
+    private(set) var hardRefreshTaps = 0
     /// Goes up on every lock, so work that finishes afterward can tell it's stale and drop its results.
     private var session = 0
 
@@ -180,6 +187,7 @@ final class AppModel {
             record(.leftWhileWaiting)
         }
         refreshStartedAt = nil
+        isHardRefresh = false
         // A lock resets Tor anyway.
         needsNetworkReset = false
         resetBeforeThisConnection = .none
@@ -234,7 +242,10 @@ final class AppModel {
         needsNetworkReset = true
         needsDescriptorRefresh = true
         resetBeforeThisConnection = .hard
+        hardRefreshTaps += 1
         refresh(retries: 6)
+        isHardRefresh = true
+        activity = .resetting
     }
 
     /// `retries` are silent: the screen keeps saying it's updating, and only the last failure is shown.
@@ -248,11 +259,15 @@ final class AppModel {
         activity = client == nil ? .startingTor(0) : .refreshing
         let startedAt = Date()
         refreshStartedAt = startedAt
+        isHardRefresh = false
+        attempt = 1
         refreshTask = Task { [weak self] in
             var retriesLeft = retries
+            var attempt = 1
             while true {
                 // Read each time, so a retry uses any address or server changed in the meantime.
                 guard let self, self.session == session, let vault = self.vault, let onion = vault.onion else { return }
+                self.attempt = attempt
                 let attemptStartedAt = Date()
                 await self.runRefresh(session: session, onion: onion, key: vault.clientKey, watched: vault.watched)
                 guard self.session == session else { return }
@@ -262,13 +277,15 @@ final class AppModel {
                 }
                 guard ConnectionRetry.shouldRetry(retriesLeft: retriesLeft, elapsedSeconds: Date().timeIntervalSince(startedAt)) else { break }
                 retriesLeft -= 1
+                attempt += 1
                 self.failure = nil
-                self.activity = .connecting
+                self.activity = .waitingToRetry
                 try? await Task.sleep(for: .seconds(8))
             }
             guard let self, self.session == session else { return }
             self.refreshTask = nil
             self.activity = .idle
+            self.isHardRefresh = false
         }
     }
 
@@ -280,6 +297,7 @@ final class AppModel {
             if client == nil {
                 activity = .startingTor(0)
                 if needsNetworkReset {
+                    activity = .resetting
                     try await tor.resetNetwork(session: session)
                     needsNetworkReset = false
                     if resetBeforeThisConnection == .none { resetBeforeThisConnection = .automatic }
@@ -290,11 +308,12 @@ final class AppModel {
                         self.activity = .startingTor(percent)
                     }
                 }
-                try await tor.addClientAuth(session: session, onion: onion, key: key)
+                // Before adding the key, because Tor's cache reset also clears keys added from memory.
                 if needsDescriptorRefresh {
                     await tor.forgetCachedServices()
                     needsDescriptorRefresh = false
                 }
+                try await tor.addClientAuth(session: session, onion: onion, key: key)
                 guard self.session == session else { return }
                 activity = .connecting
                 let connected = try await ElectrumClient.connect(socksPath: tor.socksPath, onion: onion)

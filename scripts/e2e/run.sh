@@ -23,6 +23,7 @@ cleanup() {
     [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
   done
   cp "$work/tor.log" "$results/service-tor.log" 2>/dev/null || true
+  cp "/tmp/ew-$(id -u)/tor.log" "$results/app-tor.log" 2>/dev/null || true
   rm -rf "$work"
 }
 trap cleanup EXIT

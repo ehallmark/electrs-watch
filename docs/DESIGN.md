@@ -159,6 +159,10 @@ SOCKS5 with Tor's `ExtendedErrors` gives specific failures, so the app can show 
 a generic timeout. After such a failure, Retry sends `SIGNAL NEWNYM`, which makes Tor discard its cached copy of the service
 descriptor and fetch the one that includes the new key.
 
+NEWNYM also clears client auth keys added without the `Permanent` flag, which is how this app adds its key (`hs_client_purge_state`
+in Tor's source). So the app always sends NEWNYM first and adds the key after it. Tor delays a NEWNYM sent within 10 seconds of the
+last one, and a delayed one would clear a key added in the meantime, so the app waits out that window before sending another.
+
 ## Code layout
 
 | Path | Contents |
