@@ -188,6 +188,33 @@ extension Data {
         #expect(damaged.lastSnapshot == nil)
     }
 
+    @Test func renamingKeepsTheAddressAndNormalizesTheLabel() throws {
+        var item = WatchedAddress(address: try BitcoinAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"), label: "old")
+        let address = item.address
+        item.rename(to: "  " + String(repeating: "x", count: 50) + "\n")
+        #expect(item.label == String(repeating: "x", count: 40))
+        #expect(item.address == address)
+        item.rename(to: "   ")
+        #expect(item.label.isEmpty)
+    }
+
+    @Test func aRenamedAddressKeepsItsSavedBalance() throws {
+        let original = WatchedAddress(address: try BitcoinAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"), label: "old")
+        let snapshot = WalletSnapshot(
+            tip: ChainTip(height: 1),
+            rows: [AddressStatus(
+                watched: original,
+                balance: Balance(confirmedSats: 5, unconfirmedSats: 0),
+                history: HistorySummary(transactionCount: 1, pendingCount: 0, latestConfirmedHeight: 1)
+            )],
+            fetchedAt: Date(timeIntervalSince1970: 0)
+        )
+        var renamed = original
+        renamed.rename(to: "new")
+        #expect(snapshot.keeping([renamed]).totalConfirmedSats == 5)
+        #expect(snapshot.keeping([]).rows.isEmpty)
+    }
+
     @Test func connectionLogSurvivesARoundTrip() throws {
         var vault = try sample()
         vault.connectionLog.record(.timedOut)

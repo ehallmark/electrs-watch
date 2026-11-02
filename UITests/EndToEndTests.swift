@@ -156,6 +156,17 @@ final class EndToEndTests: XCTestCase {
         XCTAssertEqual(element(app, "home.pending").label, "Pending -1,000 sats")
         XCTAssertEqual(element(app, "row.segwit").label, "50,000 sats, 2 tx")
 
+        // Renaming changes the label and keeps the balance.
+        element(app, "row.segwit").tap()
+        let renameField = element(app, "rename.label")
+        XCTAssertTrue(renameField.waitForExistence(timeout: 10), "Tapping an address didn't offer a rename")
+        renameField.tap()
+        renameField.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "segwit".count) + "cold")
+        element(app, "rename.save").tap()
+        XCTAssertTrue(element(app, "row.cold").waitForExistence(timeout: 10), "Rename didn't apply")
+        XCTAssertEqual(element(app, "row.cold").label, "50,000 sats, 2 tx")
+        XCTAssertEqual(element(app, "home.total").label, expectedTotalInSats)
+
         // Backgrounding locks, and balances are gone until unlocked.
         XCUIDevice.shared.press(.home)
         Thread.sleep(forTimeInterval: 4)
@@ -174,6 +185,7 @@ final class EndToEndTests: XCTestCase {
         // Tor resumes in the same process. Retries only if the automatic attempt fails.
         XCTAssertTrue(refreshUntil(app, timeout: 300) { !element(app, "home.stale").exists }, "Did not reconnect after unlock")
         XCTAssertEqual(element(app, "home.total").label, expectedTotalInSats)
+        XCTAssertEqual(element(app, "row.cold").label, "50,000 sats, 2 tx", "The new label didn't survive a lock and refresh")
         try signal("resumed.flag")
 
         // STALL: the harness freezes the service, so the next open gets stuck the way a phone can.

@@ -45,12 +45,20 @@ public enum AmountUnit: String, Codable, Sendable, CaseIterable {
 
 public struct WatchedAddress: Codable, Sendable, Equatable, Identifiable, Hashable {
     public let address: String
-    public var label: String
+    public private(set) var label: String
     public var id: String { address }
 
     public init(address: BitcoinAddress, label: String) {
         self.address = address.text
-        self.label = String(label.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
+        self.label = Self.normalized(label)
+    }
+
+    public mutating func rename(to label: String) {
+        self.label = Self.normalized(label)
+    }
+
+    private static func normalized(_ label: String) -> String {
+        String(label.trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
     }
 }
 
@@ -73,8 +81,10 @@ public struct WalletSnapshot: Codable, Sendable, Equatable {
     }
 
     /// Drops rows for addresses removed while a refresh was running, so totals match what's listed.
+    /// Matches on the address alone, so a renamed address keeps its balance.
     public func keeping(_ watched: [WatchedAddress]) -> WalletSnapshot {
-        WalletSnapshot(tip: tip, rows: rows.filter { watched.contains($0.watched) }, fetchedAt: fetchedAt)
+        let addresses = Set(watched.map(\.address))
+        return WalletSnapshot(tip: tip, rows: rows.filter { addresses.contains($0.watched.address) }, fetchedAt: fetchedAt)
     }
 
     public var totalConfirmedSats: Int64 { rows.reduce(0) { $0 + $1.balance.confirmedSats } }

@@ -147,6 +147,7 @@ private struct HomeView: View {
     let vault: VaultContents
     @State private var showAdd = false
     @State private var showSettings = false
+    @State private var renaming: WatchedAddress?
 
     var body: some View {
         NavigationStack {
@@ -176,6 +177,7 @@ private struct HomeView: View {
             .safeAreaInset(edge: .bottom) { statusBar }
             .sheet(isPresented: $showAdd) { AddAddressView(model: model) }
             .sheet(isPresented: $showSettings) { SettingsView(model: model, vault: vault) }
+            .sheet(item: $renaming) { RenameAddressView(model: model, item: $0) }
         }
     }
 
@@ -235,9 +237,9 @@ private struct HomeView: View {
     }
 
     private var addressesSection: some View {
-        Section("Addresses") {
+        Section {
             ForEach(vault.watched) { item in
-                let row = model.snapshot?.rows.first { $0.watched == item }
+                let row = model.snapshot?.rows.first { $0.id == item.id }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.label.isEmpty ? "Address" : item.label).font(.headline)
                     Text(item.address).font(.caption2.monospaced()).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
@@ -248,12 +250,23 @@ private struct HomeView: View {
                             .accessibilityIdentifier("row.\(item.label)")
                     }
                 }
+                // Not a Button, which would merge the row's text into one accessibility element.
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture { renaming = item }
+                .accessibilityAction(named: "Rename") { renaming = item }
             }
             .onDelete { offsets in
                 offsets.map { vault.watched[$0] }.forEach(model.remove)
             }
             if vault.watched.isEmpty {
                 Text("Nothing on watch yet. Tap + to add an address.").foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Addresses")
+        } footer: {
+            if !vault.watched.isEmpty {
+                Text("Tap an address to rename it. Swipe left to remove it.")
             }
         }
     }
@@ -347,6 +360,53 @@ private struct AddAddressView: View {
         } catch {
             problem = "That isn't a valid Bitcoin address."
         }
+    }
+}
+
+private struct RenameAddressView: View {
+    let model: AppModel
+    let item: WatchedAddress
+    @Environment(\.dismiss) private var dismiss
+    @State private var label: String
+    @State private var failed = false
+
+    init(model: AppModel, item: WatchedAddress) {
+        self.model = model
+        self.item = item
+        _label = State(initialValue: item.label)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text(item.address).font(.footnote.monospaced())
+                    TextField("Label (optional)", text: $label)
+                        .autocorrectionDisabled()
+                        .accessibilityIdentifier("rename.label")
+                } footer: {
+                    if failed {
+                        Text("Couldn't save this label.").foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle("Rename Address")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        if model.rename(item, to: label) {
+                            dismiss()
+                        } else {
+                            failed = true
+                        }
+                    }
+                    .accessibilityIdentifier("rename.save")
+                }
+            }
+        }
+        .modifier(PrivacyCovered())
     }
 }
 

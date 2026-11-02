@@ -138,9 +138,15 @@ final class AppModel {
         return persist(contents)
     }
 
+    func rename(_ item: WatchedAddress, to label: String) -> Bool {
+        guard var contents = vault, let index = contents.watched.firstIndex(where: { $0.id == item.id }) else { return false }
+        contents.watched[index].rename(to: label)
+        return persist(contents)
+    }
+
     func remove(_ item: WatchedAddress) {
         guard var contents = vault else { return }
-        contents.watched.removeAll { $0 == item }
+        contents.watched.removeAll { $0.id == item.id }
         contents.lastSnapshot = contents.lastSnapshot?.keeping(contents.watched)
         if persist(contents) {
             snapshot = snapshot?.keeping(contents.watched)
