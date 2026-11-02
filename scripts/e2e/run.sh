@@ -118,18 +118,23 @@ if grep -rlq "$service_id" "$container" 2>/dev/null; then
   fail "onion address found in app files: $(grep -rl "$service_id" "$container" | head -3)"
 fi
 find "$container" -name '*.auth_private' | grep -q . && fail "client auth key file on disk"
-echo "PASS: no onion address or key files in the app container"
+# The saved balance has just been written, and it must only be in the Keychain.
+if grep -rlq '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa' "$container" 2>/dev/null; then
+  fail "watched address found in app files: $(grep -rl '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa' "$container" | head -3)"
+fi
+echo "PASS: no onion address, watched address or key files in the app container"
 echo 1 > "$work/inspected.flag"
 
 wait_for resumed.flag 600
-echo "PASS: locked on background, cleared balances, resumed Tor after unlock"
+echo "PASS: locked on background, showed the saved balance after unlock, refreshed on open"
+cp "$work/saved.png" "$results/saved.png" 2>/dev/null || true
 
 wait "$test_pid" && test_status=0 || test_status=$?
 test_pid=""
 [ "$test_status" -eq 0 ] || fail "UI test failed, see $results/xcodebuild.log"
 echo "PASS: UI test"
 
-unexpected="$(awk '{print $1}' "$work/methods.log" | sort -u | grep -vxE 'server\.version|blockchain\.headers\.subscribe|blockchain\.scripthash\.get_balance|blockchain\.scripthash\.get_history' || true)"
+unexpected="$(awk '{print $1}' "$work/methods.log" | sort -u | grep -vxE 'server\.version|blockchain\.headers\.subscribe|blockchain\.scripthash\.subscribe|blockchain\.scripthash\.get_balance|blockchain\.scripthash\.get_history' || true)"
 [ -z "$unexpected" ] || fail "app sent other methods: $unexpected"
 echo "PASS: only allowlisted Electrum methods ($(wc -l < "$work/methods.log" | tr -d ' ') calls)"
 echo "ALL E2E CHECKS PASSED"

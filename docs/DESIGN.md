@@ -78,7 +78,7 @@ The phone generates the key, and only the public half ever leaves it. You add th
 
 ### 4. One Keychain item holds everything sensitive
 
-The onion address, client auth key, and watched addresses live in one JSON value in one Keychain item:
+The onion address, client auth key, watched addresses, display unit, and last fetched balances live in one JSON value in one Keychain item:
 
 - `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly`: not in iCloud Keychain or backups, and deleted if the passcode is removed
 - `.biometryCurrentSet`: reading it takes Face ID, and enrolling a new face makes it permanently unreadable
@@ -86,13 +86,15 @@ The onion address, client auth key, and watched addresses live in one JSON value
 Someone who learns your passcode can't enroll their own face and open it. The cost is that a Face ID change
 means setting up again: new key, and update the node. That's acceptable for an app that can't lose funds.
 
-No balance is ever stored. The numbers exist only in memory while unlocked.
+Balances are only stored in that item, so reading the saved copy takes Face ID. It's for display: it's dimmed and labeled until a refresh succeeds, and
+changing the onion address deletes it. Damage to the saved balance or unit is ignored on read, because an unreadable vault offers to erase the client key.
 
 ### 5. Read-only by construction
 
-`ElectrumRequest` is a closed Swift enum with four cases: `server.version`, `blockchain.headers.subscribe`,
-`blockchain.scripthash.get_balance`, `blockchain.scripthash.get_history`. There's no generic "send any method"
-function, so calling `blockchain.transaction.broadcast` would need a code change. The E2E mock server records
+`ElectrumRequest` is a closed Swift enum with five cases: `server.version`, `blockchain.headers.subscribe`,
+`blockchain.scripthash.subscribe`, `blockchain.scripthash.get_balance`, `blockchain.scripthash.get_history`.
+Subscribing only asks the server to track an address, which lets electrs reuse one status for both queries.
+There's no generic "send any method" function, so calling `blockchain.transaction.broadcast` would need a code change. The E2E mock server records
 every method and the test fails on any other.
 
 ### 6. Treat the server's replies as untrusted
@@ -115,7 +117,7 @@ balances. See `docs/SECURITY.md`, accepted risk R2.
 |---|---|
 | App inactive (app switcher, Control Center) | A cover hides the screen, including from the app switcher snapshot |
 | App in background | Close server connection; remove key from Tor; `DisableNetwork 1`; drop vault contents and balances from app state; invalidate Face ID context |
-| Back in foreground | Requires Face ID. Tor stays off until you tap Refresh, which turns the network on, re-adds the key, and reconnects |
+| Back in foreground | Requires Face ID. Unlocking shows the saved balance and, if there are watched addresses, refreshes right away: this turns the network on, re-adds the key, and reconnects, retrying for about a minute before showing a failure. With no addresses, Tor stays off until you tap Refresh |
 
 Tor keeps running because [one process can only start it once](https://github.com/iCepa/Tor.framework/blob/spm/Sources/CTor/TORThread.m).
 `DisableNetwork` stops all its traffic while the app is backgrounded. It also starts with the network off, so nothing happens until an unlocked session asks.
@@ -139,8 +141,9 @@ circuit. Onion services are encrypted end-to-end and the address authenticates t
 -> {"id":1,"jsonrpc":"2.0","method":"server.version","params":["electrs-watch","1.4"]}
 <- {"id":1,"jsonrpc":"2.0","result":["electrs/0.12.0","1.4"]}
 -> {"id":2,...,"method":"blockchain.headers.subscribe","params":[]}
--> {"id":3,...,"method":"blockchain.scripthash.get_balance","params":["<scripthash>"]}
--> {"id":4,...,"method":"blockchain.scripthash.get_history","params":["<scripthash>"]}
+-> {"id":3,...,"method":"blockchain.scripthash.subscribe","params":["<scripthash>"]}
+-> {"id":4,...,"method":"blockchain.scripthash.get_balance","params":["<scripthash>"]}
+-> {"id":5,...,"method":"blockchain.scripthash.get_history","params":["<scripthash>"]}
 ```
 
 The scripthash is `SHA256(scriptPubKey)` with the bytes reversed. The server sees it, which reveals the address to

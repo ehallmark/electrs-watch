@@ -116,6 +116,84 @@ extension Data {
         #expect(BitcoinAmount.format(sats: 5, signed: true) == "+0.00000005")
         #expect(BitcoinAmount.format(sats: 0, signed: true) == "0.00000000")
     }
+
+    @Test(arguments: [
+        (Int64(0), false, "0 sats"), (1, false, "1 sat"), (-1, true, "-1 sat"), (999, false, "999 sats"),
+        (1_000, false, "1,000 sats"), (-1_000, true, "-1,000 sats"), (5, true, "+5 sats"),
+        (123_506_789, false, "123,506,789 sats"), (2_100_000_000_000_000, false, "2,100,000,000,000,000 sats"),
+    ])
+    func displaysSats(sats: Int64, signed: Bool, text: String) {
+        #expect(BitcoinAmount.display(sats: sats, unit: .sats, signed: signed) == text)
+    }
+
+    @Test func displaysBTC() {
+        #expect(BitcoinAmount.display(sats: 123_456_789, unit: .btc) == "1.23456789 BTC")
+        #expect(BitcoinAmount.display(sats: -1_000, unit: .btc, signed: true) == "-0.00001000 BTC")
+    }
+
+    @Test func smallestPossibleValueDoesntCrash() {
+        #expect(BitcoinAmount.display(sats: .min, unit: .sats) == "-9,223,372,036,854,775,808 sats")
+    }
+}
+
+@Suite struct VaultCompatibilityTests {
+    private func sample() throws -> VaultContents {
+        var vault = VaultContents(clientKey: .generate())
+        let watched = WatchedAddress(address: try BitcoinAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"), label: "a")
+        vault.watched = [watched]
+        vault.unit = .sats
+        vault.lastSnapshot = WalletSnapshot(
+            tip: ChainTip(height: 7),
+            rows: [AddressStatus(
+                watched: watched,
+                balance: Balance(confirmedSats: 5, unconfirmedSats: -1),
+                history: HistorySummary(transactionCount: 2, pendingCount: 1, latestConfirmedHeight: 6))],
+            fetchedAt: Date(timeIntervalSince1970: 1_800_000_000))
+        return vault
+    }
+
+    /// Re-encodes a vault after changing its JSON, to imitate older or damaged saved data.
+    private func decode(_ vault: VaultContents, editing edit: (inout [String: Any]) -> Void) throws -> VaultContents {
+        var json = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(vault)) as? [String: Any])
+        edit(&json)
+        return try JSONDecoder().decode(VaultContents.self, from: JSONSerialization.data(withJSONObject: json))
+    }
+
+    @Test func savedBalanceAndUnitSurviveARoundTrip() throws {
+        let vault = try sample()
+        #expect(try JSONDecoder().decode(VaultContents.self, from: JSONEncoder().encode(vault)) == vault)
+    }
+
+    @Test func vaultSavedBeforeTheseFieldsStillOpens() throws {
+        let vault = try sample()
+        let old = try decode(vault) {
+            $0.removeValue(forKey: "unit")
+            $0.removeValue(forKey: "lastSnapshot")
+        }
+        #expect(old.clientKey == vault.clientKey)
+        #expect(old.watched == vault.watched)
+        #expect(old.unit == nil)
+        #expect(old.lastSnapshot == nil)
+    }
+
+    @Test func damagedDisplayExtrasDontLoseTheKey() throws {
+        let vault = try sample()
+        let damaged = try decode(vault) {
+            $0["unit"] = "dogecoin"
+            $0["lastSnapshot"] = ["tip": "nonsense"]
+        }
+        #expect(damaged.clientKey == vault.clientKey)
+        #expect(damaged.watched == vault.watched)
+        #expect(damaged.unit == nil)
+        #expect(damaged.lastSnapshot == nil)
+    }
+
+    @Test func aDamagedKeyIsStillAnError() throws {
+        let vault = try sample()
+        #expect(throws: (any Error).self) {
+            _ = try decode(vault) { $0.removeValue(forKey: "clientKey") }
+        }
+    }
 }
 
 /// A scripted peer: hands out queued replies and records what was written.
@@ -180,8 +258,10 @@ final class FakeStream: ByteStream, @unchecked Sendable {
     @Test func snapshotTotals() async throws {
         let stream = FakeStream(lines: [
             #"{"id":1,"result":{"height":7,"hex":"00"}}"#,
-            #"{"id":2,"result":{"confirmed":3,"unconfirmed":1}}"#, #"{"id":3,"result":[]}"#,
-            #"{"id":4,"result":{"confirmed":4,"unconfirmed":0}}"#, #"{"id":5,"result":[]}"#,
+            #"{"id":2,"result":null}"#,
+            #"{"id":3,"result":{"confirmed":3,"unconfirmed":1}}"#, #"{"id":4,"result":[]}"#,
+            #"{"id":5,"result":"\#(String(repeating: "c", count: 64))"}"#,
+            #"{"id":6,"result":{"confirmed":4,"unconfirmed":0}}"#, #"{"id":7,"result":[]}"#,
         ])
         let watched = try ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", "3P14159f73E4gFr7JterCCQh9QjiTjiZrG"].map {
             WatchedAddress(address: try BitcoinAddress($0), label: "x")
@@ -189,9 +269,32 @@ final class FakeStream: ByteStream, @unchecked Sendable {
         let snapshot = try await ElectrumClient(stream: stream).snapshot(of: watched)
         #expect(snapshot.totalConfirmedSats == 7)
         #expect(snapshot.totalUnconfirmedSats == 1)
+        // electrs repeats its work for any query made before subscribing.
+        let methods = stream.sent.split(separator: "\n").map { line in
+            ["subscribe", "get_balance", "get_history"].first { line.contains("scripthash.\($0)") } ?? "other"
+        }
+        #expect(methods == ["other", "subscribe", "get_balance", "get_history", "subscribe", "get_balance", "get_history"])
+    }
+
+    @Test func subscribeSendsTheScriptHash() async throws {
+        let stream = FakeStream(lines: [#"{"id":1,"result":null}"#])
+        try await ElectrumClient(stream: stream).subscribe(to: hash)
+        #expect(stream.sent.contains(#""method":"blockchain.scripthash.subscribe","params":["\#(hash.hex)"]"#))
     }
 
     // Hostile replies
+
+    @Test func subscribeRejectsABadStatus() async {
+        for status in ["\"short\"", "\"\(String(repeating: "Z", count: 64))\""] {
+            let stream = FakeStream(lines: [#"{"id":1,"result":\#(status)}"#])
+            await #expect(throws: ElectrumError.implausibleValue) { try await ElectrumClient(stream: stream).subscribe(to: hash) }
+        }
+    }
+
+    @Test func subscribeRejectsAMissingResult() async {
+        let stream = FakeStream(lines: [#"{"id":1}"#])
+        await #expect(throws: ElectrumError.malformedReply) { try await ElectrumClient(stream: stream).subscribe(to: hash) }
+    }
 
     @Test func tooManyCoinsInOneReply() async {
         let stream = FakeStream(lines: [#"{"id":1,"result":{"confirmed":2100000000000001,"unconfirmed":0}}"#])
@@ -207,8 +310,10 @@ final class FakeStream: ByteStream, @unchecked Sendable {
         let big = 2_000_000_000_000_000
         let stream = FakeStream(lines: [
             #"{"id":1,"result":{"height":7,"hex":"00"}}"#,
-            #"{"id":2,"result":{"confirmed":\#(big),"unconfirmed":0}}"#, #"{"id":3,"result":[]}"#,
-            #"{"id":4,"result":{"confirmed":\#(big),"unconfirmed":0}}"#, #"{"id":5,"result":[]}"#,
+            #"{"id":2,"result":null}"#,
+            #"{"id":3,"result":{"confirmed":\#(big),"unconfirmed":0}}"#, #"{"id":4,"result":[]}"#,
+            #"{"id":5,"result":null}"#,
+            #"{"id":6,"result":{"confirmed":\#(big),"unconfirmed":0}}"#, #"{"id":7,"result":[]}"#,
         ])
         let watched = try ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa", "3P14159f73E4gFr7JterCCQh9QjiTjiZrG"].map {
             WatchedAddress(address: try BitcoinAddress($0), label: "x")
@@ -257,8 +362,8 @@ final class FakeStream: ByteStream, @unchecked Sendable {
     }
 
     @Test func onlyAllowedMethodsExist() {
-        let all: [ElectrumRequest] = [.version, .headersSubscribe, .balance(hash), .history(hash)]
-        #expect(Set(all.map(\.method)) == ["server.version", "blockchain.headers.subscribe",
+        let all: [ElectrumRequest] = [.version, .headersSubscribe, .subscribe(hash), .balance(hash), .history(hash)]
+        #expect(Set(all.map(\.method)) == ["server.version", "blockchain.headers.subscribe", "blockchain.scripthash.subscribe",
                                            "blockchain.scripthash.get_balance", "blockchain.scripthash.get_history"])
     }
 }

@@ -87,3 +87,4 @@ gh run watch
 
 - `scripts/testflight-build.sh` with no arguments is a dry run on your Mac. It builds and checks but uploads nothing.
 - `scripts/release-build.sh` makes an Ad Hoc build. It lasts about a year, but the phone must keep Developer Mode on.
+- `make install` runs that script and installs the build on your iPhone.

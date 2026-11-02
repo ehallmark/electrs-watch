@@ -15,6 +15,7 @@ public enum ElectrumError: Error, Equatable {
 enum ElectrumRequest: Equatable {
     case version
     case headersSubscribe
+    case subscribe(ScriptHash)
     case balance(ScriptHash)
     case history(ScriptHash)
 
@@ -22,6 +23,7 @@ enum ElectrumRequest: Equatable {
         switch self {
         case .version: "server.version"
         case .headersSubscribe: "blockchain.headers.subscribe"
+        case .subscribe: "blockchain.scripthash.subscribe"
         case .balance: "blockchain.scripthash.get_balance"
         case .history: "blockchain.scripthash.get_history"
         }
@@ -31,21 +33,21 @@ enum ElectrumRequest: Equatable {
         switch self {
         case .version: ["electrs-watch", ElectrumClient.protocolVersion]
         case .headersSubscribe: []
-        case .balance(let hash), .history(let hash): [hash.hex]
+        case .subscribe(let hash), .balance(let hash), .history(let hash): [hash.hex]
         }
     }
 }
 
-public struct ChainTip: Sendable, Equatable {
+public struct ChainTip: Codable, Sendable, Equatable {
     public let height: Int
 }
 
-public struct Balance: Sendable, Equatable {
+public struct Balance: Codable, Sendable, Equatable {
     public let confirmedSats: Int64
     public let unconfirmedSats: Int64
 }
 
-public struct HistorySummary: Sendable, Equatable {
+public struct HistorySummary: Codable, Sendable, Equatable {
     public let transactionCount: Int
     public let pendingCount: Int
     public let latestConfirmedHeight: Int?
@@ -97,6 +99,19 @@ public actor ElectrumClient {
         return ChainTip(height: header.height)
     }
 
+    /// Lets electrs compute an address's status once for this connection, instead of again for
+    /// each query. Its later change notifications are skipped, since the app refreshes on request.
+    /// The reply is null for an address with no history.
+    public func subscribe(to hash: ScriptHash) async throws {
+        let status: String? = try await call(.subscribe(hash))
+        if let status, !Self.isLowercaseHash(status) { throw ElectrumError.implausibleValue }
+    }
+
+    private static func isLowercaseHash(_ text: String) -> Bool {
+        let hex = Set("0123456789abcdef".utf8)
+        return text.utf8.count == 64 && text.utf8.allSatisfy(hex.contains)
+    }
+
     public func balance(of hash: ScriptHash) async throws -> Balance {
         struct Reply: Decodable { let confirmed: Int64; let unconfirmed: Int64 }
         let reply: Reply = try await call(.balance(hash))
@@ -113,9 +128,8 @@ public actor ElectrumClient {
         let entries: [Entry] = try await call(.history(hash))
         var latest: Int?
         var pending = 0
-        let hex = Set("0123456789abcdef".utf8)
         for entry in entries {
-            guard entry.tx_hash.utf8.count == 64, entry.tx_hash.utf8.allSatisfy(hex.contains), entry.height >= -1 else {
+            guard Self.isLowercaseHash(entry.tx_hash), entry.height >= -1 else {
                 throw ElectrumError.implausibleValue
             }
             if entry.height > 0 {

@@ -6,11 +6,38 @@ public struct VaultContents: Codable, Sendable, Equatable {
     public var clientKey: ClientAuthKey
     public var onion: OnionAddress?
     public var watched: [WatchedAddress]
+    /// Nil means the default, BTC. Optional so vaults saved before this field still open.
+    public var unit: AmountUnit?
+    /// The last balances fetched, shown while a new refresh runs.
+    public var lastSnapshot: WalletSnapshot?
 
     public init(clientKey: ClientAuthKey, onion: OnionAddress? = nil, watched: [WatchedAddress] = []) {
         self.clientKey = clientKey
         self.onion = onion
         self.watched = watched
+    }
+
+    /// The display extras are decoded leniently. An unreadable vault offers to erase the client key,
+    /// and a damaged saved balance or setting must never lead there.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        clientKey = try container.decode(ClientAuthKey.self, forKey: .clientKey)
+        onion = try container.decodeIfPresent(OnionAddress.self, forKey: .onion)
+        watched = try container.decode([WatchedAddress].self, forKey: .watched)
+        unit = try? container.decodeIfPresent(AmountUnit.self, forKey: .unit)
+        lastSnapshot = try? container.decodeIfPresent(WalletSnapshot.self, forKey: .lastSnapshot)
+    }
+}
+
+public enum AmountUnit: String, Codable, Sendable, CaseIterable {
+    case btc
+    case sats
+
+    public var label: String {
+        switch self {
+        case .btc: "BTC"
+        case .sats: "sats"
+        }
     }
 }
 
@@ -25,14 +52,14 @@ public struct WatchedAddress: Codable, Sendable, Equatable, Identifiable, Hashab
     }
 }
 
-public struct AddressStatus: Sendable, Equatable, Identifiable {
+public struct AddressStatus: Codable, Sendable, Equatable, Identifiable {
     public let watched: WatchedAddress
     public let balance: Balance
     public let history: HistorySummary
     public var id: String { watched.address }
 }
 
-public struct WalletSnapshot: Sendable, Equatable {
+public struct WalletSnapshot: Codable, Sendable, Equatable {
     public let tip: ChainTip
     public let rows: [AddressStatus]
     public let fetchedAt: Date
@@ -60,6 +87,7 @@ extension ElectrumClient {
         var total: Int64 = 0
         for item in watched.prefix(VaultContents.maxAddresses) {
             let hash = try BitcoinAddress(item.address).scriptHash
+            try await subscribe(to: hash)
             let itemBalance = try await balance(of: hash)
             let itemHistory = try await history(of: hash)
             total += itemBalance.confirmedSats
@@ -79,5 +107,22 @@ public enum BitcoinAmount {
         let padded = String(repeating: "0", count: 8 - fraction.count) + fraction
         let sign = sats < 0 ? "-" : (signed && sats > 0 ? "+" : "")
         return "\(sign)\(whole).\(padded)"
+    }
+
+    /// An amount with its unit, for display: "1.23456789 BTC" or "123,456,789 sats".
+    /// Doesn't use the device's locale, so a balance reads the same everywhere.
+    public static func display(sats: Int64, unit: AmountUnit, signed: Bool = false) -> String {
+        switch unit {
+        case .btc:
+            return "\(format(sats: sats, signed: signed)) BTC"
+        case .sats:
+            var grouped = ""
+            for (index, digit) in String(sats.magnitude).reversed().enumerated() {
+                if index > 0, index % 3 == 0 { grouped.insert(",", at: grouped.startIndex) }
+                grouped.insert(digit, at: grouped.startIndex)
+            }
+            let sign = sats < 0 ? "-" : (signed && sats > 0 ? "+" : "")
+            return "\(sign)\(grouped) \(sats.magnitude == 1 ? "sat" : "sats")"
+        }
     }
 }

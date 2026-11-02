@@ -17,7 +17,7 @@
 | Stranger finds the onion address | Client auth: without the key, the service's descriptor can't be decrypted | E2E negative test |
 | Other app on the phone talks to Tor | No TCP ports. Unix sockets in the sandbox | Review; `lsof` check in E2E |
 | Stolen unlocked phone, or someone who knows the passcode | `.biometryCurrentSet`, lock on background | Device test (M5) |
-| Stolen locked phone | Keychain item needs Face ID. Tor's files only hold public network data, under `completeFileProtection` | Device test (M5) |
+| Stolen locked phone | Keychain item needs Face ID, and it's the only place balances are saved. Tor's files only hold public network data, under `completeFileProtection` | Device test (M5); E2E disk check |
 | Backup or iCloud leak | `ThisDeviceOnly`, and Tor's directory is excluded from backups | Device test (M5) |
 | Malicious keyboard | Third-party keyboards blocked | Device test (M5) |
 | Screenshots in app switcher | Cover shown when inactive, including over sheets | Device test (M5) |

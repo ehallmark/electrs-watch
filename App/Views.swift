@@ -180,15 +180,40 @@ private struct HomeView: View {
     }
 
     private func amount(_ sats: Int64, signed: Bool = false) -> String {
-        model.hideAmounts ? "••••••" : BitcoinAmount.format(sats: sats, signed: signed)
+        model.hideAmounts ? "•••••• \(model.unit.label)" : BitcoinAmount.display(sats: sats, unit: model.unit, signed: signed)
+    }
+
+    private func checkedText(_ date: Date) -> String {
+        // An older saved balance needs its date, or it could pass for today's.
+        Calendar.current.isDateInToday(date)
+            ? date.formatted(date: .omitted, time: .shortened)
+            : date.formatted(date: .abbreviated, time: .shortened)
+    }
+
+    /// Says when the numbers on screen might be out of date, and why.
+    private var staleText: String? {
+        if model.balanceIsCurrent { return nil }
+        if model.activity != .idle { return "Updating. Showing your last saved balance." }
+        if model.failure != nil { return "Couldn't update. Showing your last saved balance." }
+        return "Showing your last saved balance."
     }
 
     private var totalSection: some View {
         Section {
             if let snapshot = model.snapshot {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("\(amount(snapshot.totalConfirmedSats)) BTC")
+                    if let staleText {
+                        HStack(spacing: 8) {
+                            if model.activity != .idle { ProgressView().controlSize(.small) }
+                            Text(staleText)
+                                .font(.footnote.bold())
+                                .foregroundStyle(model.failure == nil ? Color.secondary : Color.orange)
+                                .accessibilityIdentifier("home.stale")
+                        }
+                    }
+                    Text(amount(snapshot.totalConfirmedSats))
                         .font(.title2.monospacedDigit().bold())
+                        .foregroundStyle(model.balanceIsCurrent ? .primary : .secondary)
                         .accessibilityIdentifier("home.total")
                     if snapshot.totalUnconfirmedSats != 0 {
                         Text("Pending \(amount(snapshot.totalUnconfirmedSats, signed: true))")
@@ -196,7 +221,7 @@ private struct HomeView: View {
                             .foregroundStyle(.secondary)
                             .accessibilityIdentifier("home.pending")
                     }
-                    Text("Block \(String(snapshot.tip.height)), checked \(snapshot.fetchedAt.formatted(date: .omitted, time: .shortened))")
+                    Text("Block \(String(snapshot.tip.height)), checked \(checkedText(snapshot.fetchedAt))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .accessibilityIdentifier("home.tip")
@@ -217,8 +242,9 @@ private struct HomeView: View {
                     Text(item.label.isEmpty ? "Address" : item.label).font(.headline)
                     Text(item.address).font(.caption2.monospaced()).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
                     if let row {
-                        Text("\(amount(row.balance.confirmedSats)) BTC, \(row.history.transactionCount) tx")
+                        Text("\(amount(row.balance.confirmedSats)), \(row.history.transactionCount) tx")
                             .font(.subheadline.monospacedDigit())
+                            .foregroundStyle(model.balanceIsCurrent ? .primary : .secondary)
                             .accessibilityIdentifier("row.\(item.label)")
                     }
                 }
@@ -335,6 +361,14 @@ private struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("Show amounts in") {
+                    Picker("Show amounts in", selection: Binding(get: { model.unit }, set: { model.setUnit($0) })) {
+                        ForEach(AmountUnit.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .accessibilityIdentifier("settings.unit")
+                }
                 Section("Server") {
                     Text(vault.onion?.hostname ?? "").font(.footnote.monospaced())
                     TextField("New onion address", text: $newOnion, axis: .vertical)

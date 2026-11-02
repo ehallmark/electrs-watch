@@ -21,11 +21,15 @@ final class AppModel {
     private(set) var vault: VaultContents?
     private(set) var vaultExists = false
     private(set) var snapshot: WalletSnapshot?
+    /// False while `snapshot` is a saved copy, or while a newer one is being fetched or failed to arrive.
+    private(set) var balanceIsCurrent = false
     private(set) var activity: Activity = .idle
     private(set) var failure: Failure?
     private(set) var unlockFailure: String?
     private(set) var offerErase = false
     var hideAmounts = false
+
+    var unit: AmountUnit { vault?.unit ?? .btc }
 
     private let store = KeychainVault()
     private let tor = TorService()
@@ -81,6 +85,10 @@ final class AppModel {
                 return
             }
             vault = contents
+            snapshot = contents.lastSnapshot?.keeping(contents.watched)
+            balanceIsCurrent = false
+            // Right after Tor resumes, the first connection to the service can fail briefly.
+            if !contents.watched.isEmpty { refresh(retries: 6) }
         } catch {
             guard self.session == session else { return }
             context.invalidate()
@@ -102,12 +110,21 @@ final class AppModel {
     func setOnion(_ text: String) -> Bool {
         guard var contents = vault, let onion = try? OnionAddress(text) else { return false }
         contents.onion = onion
+        // Balances saved from the old server shouldn't appear as if they came from the new one.
+        contents.lastSnapshot = nil
         guard persist(contents) else { return false }
         client?.close()
         client = nil
         snapshot = nil
+        balanceIsCurrent = false
         failure = nil
         return true
+    }
+
+    func setUnit(_ unit: AmountUnit) {
+        guard var contents = vault, contents.unit != unit else { return }
+        contents.unit = unit
+        _ = persist(contents)
     }
 
     func add(address: BitcoinAddress, label: String) -> Bool {
@@ -120,6 +137,7 @@ final class AppModel {
     func remove(_ item: WatchedAddress) {
         guard var contents = vault else { return }
         contents.watched.removeAll { $0 == item }
+        contents.lastSnapshot = contents.lastSnapshot?.keeping(contents.watched)
         if persist(contents) {
             snapshot = snapshot?.keeping(contents.watched)
         }
@@ -153,6 +171,7 @@ final class AppModel {
         context = nil
         vault = nil
         snapshot = nil
+        balanceIsCurrent = false
         failure = nil
         unlockFailure = nil
         offerErase = false
@@ -170,12 +189,27 @@ final class AppModel {
 
     // MARK: Refresh
 
-    func refresh() {
-        guard refreshTask == nil, let vault, let onion = vault.onion else { return }
+    /// `retries` are silent: the screen keeps saying it's updating, and only the last failure is shown.
+    func refresh(retries: Int = 0) {
+        guard refreshTask == nil, vault?.onion != nil else { return }
         let session = session
         failure = nil
+        balanceIsCurrent = false
+        // Set now so the screen shows progress from the first frame, with no flash of the Refresh button.
+        activity = client == nil ? .startingTor(0) : .refreshing
         refreshTask = Task { [weak self] in
-            await self?.runRefresh(session: session, onion: onion, key: vault.clientKey, watched: vault.watched)
+            var retriesLeft = retries
+            while true {
+                // Read each time, so a retry uses any address or server changed in the meantime.
+                guard let self, self.session == session, let vault = self.vault, let onion = vault.onion else { return }
+                await self.runRefresh(session: session, onion: onion, key: vault.clientKey, watched: vault.watched)
+                guard self.session == session else { return }
+                guard self.failure != nil, retriesLeft > 0 else { break }
+                retriesLeft -= 1
+                self.failure = nil
+                self.activity = .connecting
+                try? await Task.sleep(for: .seconds(8))
+            }
             guard let self, self.session == session else { return }
             self.refreshTask = nil
             self.activity = .idle
@@ -212,8 +246,16 @@ final class AppModel {
             activity = .refreshing
             guard let client else { return }
             let result = try await client.snapshot(of: watched)
-            guard self.session == session else { return }
-            snapshot = result.keeping(vault?.watched ?? [])
+            // The onion check drops a reply from a server that was replaced during this refresh.
+            guard self.session == session, var contents = vault, contents.onion == onion else { return }
+            let current = result.keeping(contents.watched)
+            snapshot = current
+            balanceIsCurrent = true
+            contents.lastSnapshot = current
+            // A failed save only costs the saved copy, so the refresh still counts as a success.
+            if let context, (try? store.save(contents, context: context)) != nil {
+                vault = contents
+            }
         } catch {
             guard self.session == session, !(error is CancellationError) else { return }
             client?.close()

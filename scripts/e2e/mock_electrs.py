@@ -28,11 +28,18 @@ WALLET = {
 }
 log_path = sys.argv[2]
 
-def handle(method, params):
+def handle(method, params, subscribed):
     if method == "server.version":
         return ["electrs/0.12.0", "1.4"]
     if method == "blockchain.headers.subscribe":
         return {"height": 900000, "hex": "00" * 80}
+    if method == "blockchain.scripthash.subscribe":
+        WALLET[params[0]]
+        subscribed.add(params[0])
+        return "cd" * 32
+    # Real electrs answers these but logs a notice about the extra work. Failing here catches a regression.
+    if method in ("blockchain.scripthash.get_balance", "blockchain.scripthash.get_history") and params[0] not in subscribed:
+        raise ValueError("queried before subscribing")
     if method == "blockchain.scripthash.get_balance":
         return WALLET[params[0]][0]
     if method == "blockchain.scripthash.get_history":
@@ -40,13 +47,14 @@ def handle(method, params):
     raise ValueError("method not allowed")
 
 async def client(reader, writer):
+    subscribed = set()
     while line := await reader.readline():
         request = json.loads(line)
         with open(log_path, "a") as log:
             log.write(request["method"] + " " + ",".join(request["params"]) + "\n")
         reply = {"id": request["id"], "jsonrpc": "2.0"}
         try:
-            reply["result"] = handle(request["method"], request["params"])
+            reply["result"] = handle(request["method"], request["params"], subscribed)
         except (ValueError, KeyError, IndexError):
             reply["error"] = {"code": 1, "message": "rejected by mock"}
         writer.write(json.dumps(reply).encode() + b"\n")

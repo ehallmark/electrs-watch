@@ -4,7 +4,8 @@ import XCTest
 /// the service and swaps files with this test through EW_E2E_DIR. Addresses are public test vectors.
 final class EndToEndTests: XCTestCase {
     private let expectedTotal = "1.23506789 BTC"
-    private let expectedPending = "Pending -0.00001000"
+    private let expectedPending = "Pending -0.00001000 BTC"
+    private let expectedTotalInSats = "123,506,789 sats"
     private let expectedTip = "Block 900000"
 
     private var directory: URL {
@@ -61,6 +62,8 @@ final class EndToEndTests: XCTestCase {
             let refresh = element(app, "home.refresh")
             if refresh.waitForExistence(timeout: 200), refresh.isHittable {
                 if done() { return true }
+                let error = element(app, "home.error")
+                print("EW_E2E refresh attempt, last error: \(error.exists ? error.label : "none")")
                 refresh.tap()
             }
             Thread.sleep(forTimeInterval: 8)
@@ -141,6 +144,18 @@ final class EndToEndTests: XCTestCase {
         try signal("connected.flag")
         _ = try waitForFile("inspected.flag")
 
+        // Amounts can be shown in sats.
+        XCTAssertFalse(element(app, "home.stale").exists, "A fresh balance was labeled as saved")
+        element(app, "home.settings").tap()
+        let sats = app.buttons["sats"]
+        XCTAssertTrue(sats.waitForExistence(timeout: 10))
+        sats.tap()
+        app.buttons["Done"].tap()
+        XCTAssertTrue(element(app, "home.total").waitForExistence(timeout: 10))
+        XCTAssertEqual(element(app, "home.total").label, expectedTotalInSats)
+        XCTAssertEqual(element(app, "home.pending").label, "Pending -1,000 sats")
+        XCTAssertEqual(element(app, "row.segwit").label, "50,000 sats, 2 tx")
+
         // Backgrounding locks, and balances are gone until unlocked.
         XCUIDevice.shared.press(.home)
         Thread.sleep(forTimeInterval: 4)
@@ -149,12 +164,16 @@ final class EndToEndTests: XCTestCase {
         XCTAssertFalse(element(app, "home.total").exists, "Balance visible while locked")
         element(app, "lock.unlock").tap()
 
-        XCTAssertTrue(element(app, "home.refresh").waitForExistence(timeout: 60), "Could not unlock")
-        XCTAssertFalse(element(app, "home.total").exists, "Balance was kept across a lock")
+        // Opening shows the saved balance, in the saved unit, clearly marked, and refreshes without a tap.
+        XCTAssertTrue(element(app, "home.total").waitForExistence(timeout: 60), "Saved balance not shown after unlock")
+        XCTAssertEqual(element(app, "home.total").label, expectedTotalInSats)
+        XCTAssertTrue(element(app, "home.stale").waitForExistence(timeout: 5), "Saved balance wasn't labeled")
+        XCTAssertTrue(element(app, "home.activity").waitForExistence(timeout: 5), "Refresh didn't start on open")
+        try XCUIScreen.main.screenshot().pngRepresentation.write(to: try directory.appendingPathComponent("saved.png"))
 
-        // Tor resumes in the same process.
-        XCTAssertTrue(refreshUntil(app, timeout: 300) { element(app, "home.total").exists }, "Did not reconnect after unlock")
-        XCTAssertEqual(element(app, "home.total").label, expectedTotal)
+        // Tor resumes in the same process. Retries only if the automatic attempt fails.
+        XCTAssertTrue(refreshUntil(app, timeout: 300) { !element(app, "home.stale").exists }, "Did not reconnect after unlock")
+        XCTAssertEqual(element(app, "home.total").label, expectedTotalInSats)
         try signal("resumed.flag")
     }
 }
