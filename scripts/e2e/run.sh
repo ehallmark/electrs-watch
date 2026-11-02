@@ -17,6 +17,8 @@ rm -rf "$results"; mkdir -p "$results"
 tor_pid="" mock_pid="" match_pid="" test_pid=""
 
 cleanup() {
+  # A frozen process wouldn't act on the kill below.
+  [ -n "$tor_pid" ] && kill -CONT "$tor_pid" 2>/dev/null || true
   for pid in "$test_pid" "$match_pid" "$mock_pid" "$tor_pid"; do
     [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
   done
@@ -128,6 +130,18 @@ echo 1 > "$work/inspected.flag"
 wait_for resumed.flag 600
 echo "PASS: locked on background, showed the saved balance after unlock, refreshed on open"
 cp "$work/saved.png" "$results/saved.png" 2>/dev/null || true
+
+echo "==> Freezing the service so the next open stalls"
+kill -STOP "$tor_pid"
+echo 1 > "$work/service-frozen.flag"
+wait_for stall-started.flag 120
+# Longer than one attempt's timeout, so at least one attempt stalls and fails.
+sleep 75
+kill -CONT "$tor_pid"
+echo 1 > "$work/service-thawed.flag"
+wait_for recovered.flag 420
+echo "PASS: recovered from a stall by resetting Tor, with no tap, and logged it"
+cp "$work/log.png" "$results/log.png" 2>/dev/null || true
 
 wait "$test_pid" && test_status=0 || test_status=$?
 test_pid=""

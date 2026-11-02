@@ -10,6 +10,7 @@ public struct VaultContents: Codable, Sendable, Equatable {
     public var unit: AmountUnit?
     /// The last balances fetched, shown while a new refresh runs.
     public var lastSnapshot: WalletSnapshot?
+    public var connectionLog = ConnectionLog()
 
     public init(clientKey: ClientAuthKey, onion: OnionAddress? = nil, watched: [WatchedAddress] = []) {
         self.clientKey = clientKey
@@ -26,6 +27,7 @@ public struct VaultContents: Codable, Sendable, Equatable {
         watched = try container.decode([WatchedAddress].self, forKey: .watched)
         unit = try? container.decodeIfPresent(AmountUnit.self, forKey: .unit)
         lastSnapshot = try? container.decodeIfPresent(WalletSnapshot.self, forKey: .lastSnapshot)
+        connectionLog = (try? container.decodeIfPresent(ConnectionLog.self, forKey: .connectionLog)) ?? ConnectionLog()
     }
 }
 

@@ -391,6 +391,20 @@ private struct SettingsView: View {
                     }
                 }
                 Section {
+                    let outcomes = ConnectionLog.Outcome.allCases.filter { vault.connectionLog.count(of: $0) > 0 }
+                    ForEach(outcomes, id: \.self) { outcome in
+                        LabeledContent(outcome.label, value: String(vault.connectionLog.count(of: outcome)))
+                            .accessibilityIdentifier("settings.log.\(outcome.rawValue)")
+                    }
+                    if outcomes.isEmpty {
+                        Text("Nothing yet").foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Connection history")
+                } footer: {
+                    Text("Counts only, with no addresses or times. Stays on this phone.")
+                }
+                Section {
                     Button("Lock Now") { dismiss(); model.lock() }
                     Button("Erase Everything", role: .destructive) { confirmErase = true }
                 } footer: {

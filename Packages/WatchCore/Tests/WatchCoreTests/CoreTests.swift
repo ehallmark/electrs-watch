@@ -188,6 +188,27 @@ extension Data {
         #expect(damaged.lastSnapshot == nil)
     }
 
+    @Test func connectionLogSurvivesARoundTrip() throws {
+        var vault = try sample()
+        vault.connectionLog.record(.timedOut)
+        vault.connectionLog.record(.timedOut)
+        vault.connectionLog.record(.connectedAfterReset)
+        let decoded = try JSONDecoder().decode(VaultContents.self, from: JSONEncoder().encode(vault))
+        #expect(decoded.connectionLog.count(of: .timedOut) == 2)
+        #expect(decoded.connectionLog.count(of: .connectedAfterReset) == 1)
+        #expect(decoded.connectionLog.count(of: .connected) == 0)
+    }
+
+    @Test func missingOrDamagedConnectionLogDoesntLoseTheKey() throws {
+        let vault = try sample()
+        let missing = try decode(vault) { $0.removeValue(forKey: "connectionLog") }
+        let damaged = try decode(vault) { $0["connectionLog"] = "nonsense" }
+        for result in [missing, damaged] {
+            #expect(result.clientKey == vault.clientKey)
+            #expect(result.connectionLog == ConnectionLog())
+        }
+    }
+
     @Test func aDamagedKeyIsStillAnError() throws {
         let vault = try sample()
         #expect(throws: (any Error).self) {
@@ -510,6 +531,31 @@ final class FakeStream: ByteStream, @unchecked Sendable {
     @Test func bootstrapParsesMultilineReply() async throws {
         let (control, _) = client("250-status/bootstrap-phase=NOTICE BOOTSTRAP PROGRESS=75 TAG=x SUMMARY=\"y\"\r\n250 OK\r\n")
         #expect(try await control.bootstrapPercent() == 75)
+    }
+
+    @Test(arguments: [("1", true), ("0", false)])
+    func directoryInfoParsesReply(value: String, expected: Bool) async throws {
+        let (control, stream) = client("250-status/enough-dir-info=\(value)\r\n250 OK\r\n")
+        #expect(try await control.hasEnoughDirectoryInfo() == expected)
+        #expect(stream.sent == "GETINFO status/enough-dir-info\r\n")
+    }
+
+    @Test func directoryInfoMissingFromReplyIsAnError() async {
+        let (control, _) = client("250 OK\r\n")
+        await #expect(throws: TorControlError.malformedReply) { try await control.hasEnoughDirectoryInfo() }
+    }
+
+    @Test func retriesStopOnCountOrTime() {
+        #expect(ConnectionRetry.shouldRetry(retriesLeft: 1, elapsedSeconds: 0))
+        #expect(ConnectionRetry.shouldRetry(retriesLeft: 1, elapsedSeconds: 179))
+        #expect(!ConnectionRetry.shouldRetry(retriesLeft: 0, elapsedSeconds: 0))
+        #expect(!ConnectionRetry.shouldRetry(retriesLeft: 6, elapsedSeconds: 180))
+    }
+
+    @Test func onlySlowFailuresCountAsStalls() {
+        #expect(!ConnectionRetry.isStall(attemptSeconds: 1))
+        #expect(ConnectionRetry.isStall(attemptSeconds: 20))
+        #expect(ConnectionRetry.isStall(attemptSeconds: 60))
     }
 
     @Test func authFailureIsAnError() async {

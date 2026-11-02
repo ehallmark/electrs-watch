@@ -41,6 +41,15 @@ public actor TorControlClient {
         throw TorControlError.malformedReply
     }
 
+    /// Bootstrap progress stays at 100 once reached, so this is what shows if the network info has since gone out of date.
+    public func hasEnoughDirectoryInfo() async throws -> Bool {
+        let lines = try await send("GETINFO", ["status/enough-dir-info"], accepting: [250])
+        for line in lines where line.hasPrefix("status/enough-dir-info=") {
+            return line.hasSuffix("=1")
+        }
+        throw TorControlError.malformedReply
+    }
+
     /// Stores the key in Tor's memory only, since there's no "Permanent" flag.
     /// Success: 250 new, 251 replaced an existing key, 252 also decrypted a cached descriptor.
     public func addClientAuth(onion: OnionAddress, key: ClientAuthKey) async throws {

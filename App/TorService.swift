@@ -82,11 +82,31 @@ actor TorService {
         _ = try? await run(client) { try await $0.forgetCachedServices() }
     }
 
+    /// Whether Tor has current enough network info to build circuits. Nil if it couldn't be asked.
+    func hasEnoughDirectoryInfo() async -> Bool? {
+        guard let client = control else { return nil }
+        return try? await run(client) { try await $0.hasEnoughDirectoryInfo() }
+    }
+
+    /// Clears a stuck Tor the way a lock and unlock does: its relay connections close and the key
+    /// is removed. `start` and `addClientAuth` then bring it back.
+    func resetNetwork(session: Int) async throws {
+        try checkNotLocked(session)
+        guard thread != nil else { return }
+        let client = try await connectControl()
+        try checkNotLocked(session)
+        await takeOffline(client)
+    }
+
     /// Called on lock. Tor can't be restarted in the same process, so it idles with its network off.
     func suspend(session: Int) async {
         lockedThrough = max(lockedThrough, session)
         guard thread != nil else { return }
         guard let client = try? await connectControl(), latestStartedSession <= session else { return }
+        await takeOffline(client)
+    }
+
+    private func takeOffline(_ client: TorControlClient) async {
         // Queued with no suspension point between them, so nothing can land in between.
         let onion = loadedOnion
         let remove = onion.map { onion in enqueue(client) { try await $0.removeClientAuth(onion: onion) } }

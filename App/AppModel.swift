@@ -39,6 +39,10 @@ final class AppModel {
     private var suspendTask: Task<Void, Never>?
     private var unlocking = false
     private var needsDescriptorRefresh = false
+    /// Set after a stalled attempt, because a new connection through a stuck Tor tends to stall too.
+    private var needsNetworkReset = false
+    private var resetBeforeThisConnection = false
+    private var refreshStartedAt: Date?
     /// Goes up on every lock, so work that finishes afterward can tell it's stale and drop its results.
     private var session = 0
 
@@ -152,8 +156,26 @@ final class AppModel {
         return true
     }
 
+    /// A failed save only costs this count, so it's never reported as a problem.
+    private func record(_ outcome: ConnectionLog.Outcome) {
+        guard var contents = vault else { return }
+        contents.connectionLog.record(outcome)
+        vault = contents
+        if let context { try? store.save(contents, context: context) }
+    }
+
     /// Runs on leaving the foreground and on request. Everything sensitive leaves app state here.
     func lock() {
+        // Has to come first: saving needs the unlocked context. A stall is often ended by leaving,
+        // so without this the log would miss the case it's there to explain.
+        if client == nil, activity != .idle, let refreshStartedAt,
+           ConnectionRetry.isStall(attemptSeconds: Date().timeIntervalSince(refreshStartedAt)) {
+            record(.leftWhileWaiting)
+        }
+        refreshStartedAt = nil
+        // A lock resets Tor anyway.
+        needsNetworkReset = false
+        resetBeforeThisConnection = false
         let lockedSession = session
         session += 1
         refreshTask?.cancel()
@@ -190,6 +212,7 @@ final class AppModel {
     // MARK: Refresh
 
     /// `retries` are silent: the screen keeps saying it's updating, and only the last failure is shown.
+    /// `ConnectionRetry` also limits them by time, so a run of slow failures can't hide for long.
     func refresh(retries: Int = 0) {
         guard refreshTask == nil, vault?.onion != nil else { return }
         let session = session
@@ -197,14 +220,21 @@ final class AppModel {
         balanceIsCurrent = false
         // Set now so the screen shows progress from the first frame, with no flash of the Refresh button.
         activity = client == nil ? .startingTor(0) : .refreshing
+        let startedAt = Date()
+        refreshStartedAt = startedAt
         refreshTask = Task { [weak self] in
             var retriesLeft = retries
             while true {
                 // Read each time, so a retry uses any address or server changed in the meantime.
                 guard let self, self.session == session, let vault = self.vault, let onion = vault.onion else { return }
+                let attemptStartedAt = Date()
                 await self.runRefresh(session: session, onion: onion, key: vault.clientKey, watched: vault.watched)
                 guard self.session == session else { return }
-                guard self.failure != nil, retriesLeft > 0 else { break }
+                guard self.failure != nil else { break }
+                if ConnectionRetry.isStall(attemptSeconds: Date().timeIntervalSince(attemptStartedAt)) {
+                    self.needsNetworkReset = true
+                }
+                guard ConnectionRetry.shouldRetry(retriesLeft: retriesLeft, elapsedSeconds: Date().timeIntervalSince(startedAt)) else { break }
                 retriesLeft -= 1
                 self.failure = nil
                 self.activity = .connecting
@@ -223,6 +253,11 @@ final class AppModel {
             await suspendTask?.value
             if client == nil {
                 activity = .startingTor(0)
+                if needsNetworkReset {
+                    try await tor.resetNetwork(session: session)
+                    needsNetworkReset = false
+                    resetBeforeThisConnection = true
+                }
                 try await tor.start(session: session) { percent in
                     Task { @MainActor [weak self] in
                         guard let self, self.session == session, case .startingTor = self.activity else { return }
@@ -242,6 +277,8 @@ final class AppModel {
                     return
                 }
                 client = connected
+                record(resetBeforeThisConnection ? .connectedAfterReset : .connected)
+                resetBeforeThisConnection = false
             }
             activity = .refreshing
             guard let client else { return }
@@ -267,7 +304,28 @@ final class AppModel {
             default:
                 break
             }
+            var outcome = Self.outcome(of: error)
+            // Asked now, since a later retry may have refreshed the info.
+            if outcome == .timedOut, await tor.hasEnoughDirectoryInfo() == false {
+                outcome = .timedOutWithoutNetworkInfo
+            }
+            guard self.session == session else { return }
+            record(outcome)
             failure = Failure(message: Self.describe(error))
+        }
+    }
+
+    private static func outcome(of error: Error) -> ConnectionLog.Outcome {
+        switch error {
+        case StreamError.timedOut: .timedOut
+        case StreamError.closed: .dropped
+        case StreamError.socketFailed, StreamError.pathTooLong: .localSocketFailed
+        case TorConnectError.serviceUnreachable: .unreachable
+        case TorConnectError.serviceNotFound: .serviceNotFound
+        case TorConnectError.notAuthorized: .notAuthorized
+        case TorServiceError.startFailed, TorServiceError.stopped, TorServiceError.bootstrapTimedOut: .torNotStarted
+        case is ElectrumError: .badServerReply
+        default: .other
         }
     }
 

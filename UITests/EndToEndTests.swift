@@ -175,5 +175,31 @@ final class EndToEndTests: XCTestCase {
         XCTAssertTrue(refreshUntil(app, timeout: 300) { !element(app, "home.stale").exists }, "Did not reconnect after unlock")
         XCTAssertEqual(element(app, "home.total").label, expectedTotalInSats)
         try signal("resumed.flag")
+
+        // STALL: the harness freezes the service, so the next open gets stuck the way a phone can.
+        _ = try waitForFile("service-frozen.flag")
+        XCUIDevice.shared.press(.home)
+        Thread.sleep(forTimeInterval: 4)
+        app.activate()
+        XCTAssertTrue(element(app, "lock.unlock").waitForExistence(timeout: 20), "Did not lock on background")
+        element(app, "lock.unlock").tap()
+        XCTAssertTrue(element(app, "home.activity").waitForExistence(timeout: 60), "Refresh didn't start on open")
+        try signal("stall-started.flag")
+        _ = try waitForFile("service-thawed.flag", timeout: 180)
+
+        // The app has to recover by itself, by resetting Tor between attempts, with no tap needed.
+        let recovered = element(app, "home.stale")
+        let deadline = Date().addingTimeInterval(240)
+        while recovered.exists, Date() < deadline { Thread.sleep(forTimeInterval: 2) }
+        XCTAssertFalse(recovered.exists, "Did not recover by itself. Last error: \(element(app, "home.error").label)")
+
+        // The log shows what happened, and it survived the earlier lock.
+        element(app, "home.settings").tap()
+        XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 10))
+        app.swipeUp()
+        XCTAssertTrue(element(app, "settings.log.connected").waitForExistence(timeout: 10), "Connection log missing")
+        XCTAssertTrue(element(app, "settings.log.connectedAfterReset").exists, "Recovery didn't go through a reset")
+        try XCUIScreen.main.screenshot().pngRepresentation.write(to: try directory.appendingPathComponent("log.png"))
+        try signal("recovered.flag")
     }
 }

@@ -78,7 +78,7 @@ The phone generates the key, and only the public half ever leaves it. You add th
 
 ### 4. One Keychain item holds everything sensitive
 
-The onion address, client auth key, watched addresses, display unit, and last fetched balances live in one JSON value in one Keychain item:
+The onion address, client auth key, watched addresses, display unit, last fetched balances, and connection counts live in one JSON value in one Keychain item:
 
 - `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly`: not in iCloud Keychain or backups, and deleted if the passcode is removed
 - `.biometryCurrentSet`: reading it takes Face ID, and enrolling a new face makes it permanently unreadable
@@ -87,7 +87,9 @@ Someone who learns your passcode can't enroll their own face and open it. The co
 means setting up again: new key, and update the node. That's acceptable for an app that can't lose funds.
 
 Balances are only stored in that item, so reading the saved copy takes Face ID. It's for display: it's dimmed and labeled until a refresh succeeds, and
-changing the onion address deletes it. Damage to the saved balance or unit is ignored on read, because an unreadable vault offers to erase the client key.
+changing the onion address deletes it. Damage to the saved balance, unit, or connection counts is ignored on read, because an unreadable vault offers to erase the client key.
+
+Settings shows the connection counts, one per kind of outcome, to help explain slow connections. They hold no addresses, times, or server text, and never leave the phone.
 
 ### 5. Read-only by construction
 
@@ -117,10 +119,12 @@ balances. See `docs/SECURITY.md`, accepted risk R2.
 |---|---|
 | App inactive (app switcher, Control Center) | A cover hides the screen, including from the app switcher snapshot |
 | App in background | Close server connection; remove key from Tor; `DisableNetwork 1`; drop vault contents and balances from app state; invalidate Face ID context |
-| Back in foreground | Requires Face ID. Unlocking shows the saved balance and, if there are watched addresses, refreshes right away: this turns the network on, re-adds the key, and reconnects, retrying for about a minute before showing a failure. With no addresses, Tor stays off until you tap Refresh |
+| Back in foreground | Requires Face ID. Unlocking shows the saved balance and, if there are watched addresses, refreshes right away: this turns the network on, re-adds the key, and reconnects, retrying for up to about 4 minutes before showing a failure. With no addresses, Tor stays off until you tap Refresh |
 
 Tor keeps running because [one process can only start it once](https://github.com/iCepa/Tor.framework/blob/spm/Sources/CTor/TORThread.m).
 `DisableNetwork` stops all its traffic while the app is backgrounded. It also starts with the network off, so nothing happens until an unlocked session asks.
+
+Each connection attempt times out after 60 seconds. An attempt that took 20 seconds or more counts as stuck, so before the next attempt the app removes the key and turns Tor's network off and on, the same reset a lock and unlock causes. Faster failures retry without a reset, because they usually pass quickly and a reset would bring back the moment right after Tor resumes. No new attempt starts after 3 minutes.
 
 A lock has to win against work already in progress. Tor commands run through a single queue, in an order fixed at the moment they're
 queued, and anything that exposes something first checks that its session hasn't been locked. The app also asks iOS for background time, so the cleanup commands get to finish.

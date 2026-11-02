@@ -11,8 +11,9 @@ public enum TorConnectError: Error, Equatable {
 }
 
 enum Socks5 {
-    /// Long enough for Tor to build an onion circuit and for retries on a slow network.
-    static let connectTimeout: TimeInterval = 150
+    /// Long enough for Tor to reach an onion service on a slow network. Past this, Tor is more
+    /// likely stuck than slow, and the app retries after resetting it.
+    static let connectTimeout: TimeInterval = 60
 
     /// Connects through Tor. Always sends the hostname, so nothing is resolved outside Tor,
     /// and only accepts an `OnionAddress`, so this can't be pointed at the open internet.
