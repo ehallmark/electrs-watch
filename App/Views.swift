@@ -281,19 +281,30 @@ private struct HomeView: View {
                     .accessibilityIdentifier("home.error")
             }
             if model.activity == .idle {
-                Button(model.failure == nil ? "Refresh" : "Retry") { model.refresh() }
-                    .buttonStyle(.borderedProminent)
-                    .accessibilityIdentifier("home.refresh")
+                HStack(spacing: 12) {
+                    Button(model.failure == nil ? "Refresh" : "Retry") { model.refresh() }
+                        .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier("home.refresh")
+                    hardRefreshButton
+                }
             } else {
                 HStack(spacing: 8) {
                     ProgressView()
                     Text(activityText).font(.footnote).accessibilityIdentifier("home.activity")
                 }
+                hardRefreshButton
             }
         }
         .padding()
         .frame(maxWidth: .infinity)
         .background(.bar)
+    }
+
+    /// Always available, so a stuck connection never has to wait out its retries.
+    private var hardRefreshButton: some View {
+        Button("Hard Refresh") { model.hardRefresh() }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("home.hardRefresh")
     }
 
     private var activityText: String {

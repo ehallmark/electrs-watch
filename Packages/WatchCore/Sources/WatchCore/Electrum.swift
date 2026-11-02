@@ -71,14 +71,20 @@ public actor ElectrumClient {
         self.requestTimeout = requestTimeout
     }
 
-    /// Opens an Electrum session over Tor at `socksPath`. The stream is closed on failure.
+    /// Opens an Electrum session over Tor at `socksPath`. The stream is closed on failure, and on
+    /// cancellation, which ends a wait for Tor right away instead of at its timeout.
     public static func connect(socksPath: String, onion: OnionAddress, port: UInt16 = 50001) async throws -> ElectrumClient {
         let stream = try UnixSocketStream(path: socksPath)
         do {
-            try await Socks5.connect(over: stream, to: onion, port: port)
-            let client = ElectrumClient(stream: stream)
-            try await client.negotiateVersion()
-            return client
+            return try await withTaskCancellationHandler {
+                try await Socks5.connect(over: stream, to: onion, port: port)
+                let client = ElectrumClient(stream: stream)
+                try await client.negotiateVersion()
+                try Task.checkCancellation()
+                return client
+            } onCancel: {
+                stream.close()
+            }
         } catch {
             stream.close()
             throw error

@@ -41,7 +41,8 @@ final class AppModel {
     private var needsDescriptorRefresh = false
     /// Set after a stalled attempt, because a new connection through a stuck Tor tends to stall too.
     private var needsNetworkReset = false
-    private var resetBeforeThisConnection = false
+    private enum Reset { case none, automatic, hard }
+    private var resetBeforeThisConnection = Reset.none
     private var refreshStartedAt: Date?
     /// Goes up on every lock, so work that finishes afterward can tell it's stale and drop its results.
     private var session = 0
@@ -181,7 +182,7 @@ final class AppModel {
         refreshStartedAt = nil
         // A lock resets Tor anyway.
         needsNetworkReset = false
-        resetBeforeThisConnection = false
+        resetBeforeThisConnection = .none
         let lockedSession = session
         session += 1
         refreshTask?.cancel()
@@ -216,6 +217,25 @@ final class AppModel {
     }
 
     // MARK: Refresh
+
+    /// Drops whatever is in progress and reconnects from scratch: Tor's relay connections close, its
+    /// key is reloaded, and it builds new circuits and fetches the server's info again. Tor itself can't
+    /// be restarted in the same process. Its guard and circuit timing data are kept on purpose,
+    /// since Tor warns that discarding them makes tracking easier.
+    func hardRefresh() {
+        guard vault?.onion != nil else { return }
+        record(.hardRefreshUsed)
+        // Work still running from before sees a different session and drops its results.
+        session += 1
+        refreshTask?.cancel()
+        refreshTask = nil
+        client?.close()
+        client = nil
+        needsNetworkReset = true
+        needsDescriptorRefresh = true
+        resetBeforeThisConnection = .hard
+        refresh(retries: 6)
+    }
 
     /// `retries` are silent: the screen keeps saying it's updating, and only the last failure is shown.
     /// `ConnectionRetry` also limits them by time, so a run of slow failures can't hide for long.
@@ -262,7 +282,7 @@ final class AppModel {
                 if needsNetworkReset {
                     try await tor.resetNetwork(session: session)
                     needsNetworkReset = false
-                    resetBeforeThisConnection = true
+                    if resetBeforeThisConnection == .none { resetBeforeThisConnection = .automatic }
                 }
                 try await tor.start(session: session) { percent in
                     Task { @MainActor [weak self] in
@@ -283,8 +303,12 @@ final class AppModel {
                     return
                 }
                 client = connected
-                record(resetBeforeThisConnection ? .connectedAfterReset : .connected)
-                resetBeforeThisConnection = false
+                switch resetBeforeThisConnection {
+                case .none: record(.connected)
+                case .automatic: record(.connectedAfterReset)
+                case .hard: record(.connectedAfterHardRefresh)
+                }
+                resetBeforeThisConnection = .none
             }
             activity = .refreshing
             guard let client else { return }

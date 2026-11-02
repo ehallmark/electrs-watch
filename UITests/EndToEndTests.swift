@@ -211,6 +211,24 @@ final class EndToEndTests: XCTestCase {
         app.swipeUp()
         XCTAssertTrue(element(app, "settings.log.connected").waitForExistence(timeout: 10), "Connection log missing")
         XCTAssertTrue(element(app, "settings.log.connectedAfterReset").exists, "Recovery didn't go through a reset")
+        app.buttons["Done"].tap()
+
+        // HARD REFRESH: starts over from scratch, and reconnects.
+        let hardRefresh = element(app, "home.hardRefresh")
+        XCTAssertTrue(hardRefresh.waitForExistence(timeout: 10), "No Hard Refresh button")
+        hardRefresh.tap()
+        XCTAssertTrue(element(app, "home.stale").waitForExistence(timeout: 5), "Hard refresh didn't start an update")
+        // Tapping again mid-attempt must abandon that attempt cleanly, not stack a second one.
+        if hardRefresh.waitForExistence(timeout: 5) { hardRefresh.tap() }
+        let hardDeadline = Date().addingTimeInterval(240)
+        while element(app, "home.stale").exists, Date() < hardDeadline { Thread.sleep(forTimeInterval: 2) }
+        XCTAssertFalse(element(app, "home.stale").exists, "Hard refresh didn't reconnect. Last error: \(element(app, "home.error").label)")
+        XCTAssertEqual(element(app, "home.total").label, expectedTotalInSats)
+        element(app, "home.settings").tap()
+        XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 10))
+        app.swipeUp()
+        XCTAssertTrue(element(app, "settings.log.connectedAfterHardRefresh").waitForExistence(timeout: 10), "Hard refresh wasn't logged")
+        XCTAssertTrue(element(app, "settings.log.hardRefreshUsed").exists, "Hard refresh taps weren't counted")
         try XCUIScreen.main.screenshot().pngRepresentation.write(to: try directory.appendingPathComponent("log.png"))
         try signal("recovered.flag")
     }

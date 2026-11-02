@@ -23,6 +23,8 @@ public struct ConnectionLog: Codable, Sendable, Equatable {
     public enum Outcome: String, CaseIterable, Sendable {
         case connected
         case connectedAfterReset
+        case connectedAfterHardRefresh
+        case hardRefreshUsed
         case timedOut
         case timedOutWithoutNetworkInfo
         case unreachable
@@ -39,6 +41,8 @@ public struct ConnectionLog: Codable, Sendable, Equatable {
             switch self {
             case .connected: "Connected"
             case .connectedAfterReset: "Connected after resetting Tor"
+            case .connectedAfterHardRefresh: "Connected after a hard refresh"
+            case .hardRefreshUsed: "Hard refreshes"
             case .timedOut: "Timed out"
             case .timedOutWithoutNetworkInfo: "Timed out, Tor's network info out of date"
             case .unreachable: "Server unreachable"

@@ -126,6 +126,8 @@ Tor keeps running because [one process can only start it once](https://github.co
 
 Each connection attempt times out after 60 seconds. An attempt that took 20 seconds or more counts as stuck, so before the next attempt the app removes the key and turns Tor's network off and on, the same reset a lock and unlock causes. Faster failures retry without a reset, because they usually pass quickly and a reset would bring back the moment right after Tor resumes. No new attempt starts after 3 minutes.
 
+Hard Refresh, on the home screen at all times, abandons the current attempt right away and starts over: the same reset, plus `SIGNAL NEWNYM` for new circuits and a fresh copy of the service's info. Tor can't be restarted within one process, so this is as close to a restart as the app can get. It doesn't use `DROPGUARDS` or `DROPTIMEOUTS`, because Tor's docs warn that they make tracking easier over time.
+
 A lock has to win against work already in progress. Tor commands run through a single queue, in an order fixed at the moment they're
 queued, and anything that exposes something first checks that its session hasn't been locked. The app also asks iOS for background time, so the cleanup commands get to finish.
 
