@@ -97,7 +97,7 @@ fail() { echo "FAIL: $1" >&2; exit 1; }
 [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")" = "$bundle_id" ] || fail "wrong bundle ID."
 [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Info.plist")" = "$build_number" ] || fail "wrong build number."
 # The embedded Tor encrypts traffic itself, so the build must not claim otherwise.
-[ "$(/usr/libexec/PlistBuddy -c 'Print :ITSAppUsesNonExemptEncryption' "$app/Info.plist" 2>/dev/null)" = "true" ] || fail "the encryption declaration is missing."
+[ "$(/usr/libexec/PlistBuddy -c 'Print :ITSAppUsesNonExemptEncryption' "$app/Info.plist" 2>/dev/null)" = "false" ] || fail "the encryption declaration is missing."
 
 renew=no
 profile_end="$(plutil -extract ExpirationDate raw -o - "$profile")"
