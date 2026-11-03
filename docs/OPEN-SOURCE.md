@@ -74,7 +74,7 @@ the `testflight` environment as in `docs/RELEASING.md`, step 5.
 
 | Item | Notes |
 |---|---|
-| Name | The display name has to be unique on the App Store. Check "Nightwatch" is free when creating the app record |
+| Name | The display name has to be unique on the App Store. Check "electrs-watch" is free when creating the app record. The home screen shows the same name, which hints at Bitcoin to anyone who sees the phone; that was chosen knowingly |
 | Privacy | Privacy policy URL: `PRIVACY.md` on GitHub. App Privacy answer: Data Not Collected |
 | Encryption export | The app includes Tor, so `ITSAppUsesNonExemptEncryption` is `YES`. App Store Connect asks follow-up questions; publicly available open source encryption usually qualifies for an exemption, but check Apple's export compliance guidance and answer for yourself |
 | App Review access | Reviewers can't reach your node or authorize a key on it. Decide between a review-only demo server (an onion service with mock data and no client authorization) and a clearly labeled demo mode inside the app |

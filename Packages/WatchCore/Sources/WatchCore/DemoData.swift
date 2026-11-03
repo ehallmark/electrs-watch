@@ -76,6 +76,6 @@ public enum DemoData {
 
     /// A well-formed ID that no real transaction has: a hash of a label, not of a transaction.
     private static func fakeID(_ sample: Int, _ index: Int) -> TxID {
-        TxID(internalBytes: Data(SHA256.hash(data: Data("nightwatch demo \(sample) \(index)".utf8))))
+        TxID(internalBytes: Data(SHA256.hash(data: Data("electrs-watch demo \(sample) \(index)".utf8))))
     }
 }

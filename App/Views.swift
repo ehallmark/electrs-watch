@@ -51,7 +51,7 @@ private struct WelcomeView: View {
         VStack(spacing: 20) {
             Spacer()
             Emblem()
-            Text("Nightwatch").font(.largeTitle.bold())
+            Text("electrs-watch").font(.largeTitle.bold())
             Text(Theme.tagline).font(.headline).italic().foregroundStyle(.secondary)
             Text("See the balance of addresses you choose, from your own server, over Tor. This app holds no wallet keys and can't spend.")
                 .multilineTextAlignment(.center)
@@ -546,7 +546,7 @@ private struct SettingsView: View {
                 } header: {
                     Text("About")
                 } footer: {
-                    Text("Nightwatch is open source under the MIT license.")
+                    Text("electrs-watch is open source under the MIT license.")
                 }
                 Section {
                     Button("Lock Now") { dismiss(); model.lock() }

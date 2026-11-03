@@ -1,7 +1,5 @@
 # electrs-watch
 
-**Nightwatch** on the home screen. `electrs-watch` stays as the repo and project name, and the bundle ID doesn't change.
-
 A small iPhone app that shows the balance of Bitcoin addresses you choose, using your own electrs
 server over a private Tor onion service.
 

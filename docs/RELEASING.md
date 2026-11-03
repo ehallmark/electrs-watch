@@ -25,7 +25,7 @@ and Profiles. Delete the repo secrets. Don't install any build from TestFlight u
 ### 1. Create the app record
 
 In [App Store Connect](https://appstoreconnect.apple.com/apps), add a new iOS app with bundle ID `com.ehallmark.electrswatch`. App names must be unique across the
-store, so use something like "Nightwatch Node Viewer". Creating a record doesn't publish anything, and the home-screen name still comes from the build.
+store, so use something like "electrs-watch Node Viewer". Creating a record doesn't publish anything, and the home-screen name still comes from the build.
 
 ### 2. Create the API key
 
@@ -40,7 +40,7 @@ In Xcode, go to Settings, Accounts, Manage Certificates. Add an **Apple Distribu
 ### 4. Create the profile
 
 On [Apple's Profiles page](https://developer.apple.com/account/resources/profiles/add), choose **App Store Connect** under Distribution. Select the
-`com.ehallmark.electrswatch` App ID and the certificate from step 3, name it `Nightwatch TestFlight`, and download it.
+`com.ehallmark.electrswatch` App ID and the certificate from step 3, name it `electrs-watch TestFlight`, and download it.
 
 ### 5. Store the secrets
 
@@ -49,7 +49,7 @@ From this repo, using your own file paths. `gh secret set` prompts for values, s
 ```sh
 base64 -i distribution.p12 | gh secret set APPLE_DISTRIBUTION_P12 --env testflight
 gh secret set APPLE_DISTRIBUTION_P12_PASSWORD --env testflight
-base64 -i Nightwatch_TestFlight.mobileprovision | gh secret set TESTFLIGHT_PROFILE --env testflight
+base64 -i electrs-watch_TestFlight.mobileprovision | gh secret set TESTFLIGHT_PROFILE --env testflight
 gh secret set ASC_KEY_P8 --env testflight < AuthKey_XXXXXXXXXX.p8
 gh secret set ASC_KEY_ID --env testflight
 gh secret set ASC_ISSUER_ID --env testflight
@@ -70,9 +70,9 @@ gh run watch
 1. Wait for the build to finish processing in App Store Connect. Answer its export compliance question if it asks.
 2. Under the app's TestFlight tab, create an internal group, add yourself, and turn on automatic distribution.
 3. Install Apple's TestFlight app on the phone and accept the invite.
-4. Install Nightwatch over the existing copy. Don't delete the old one first.
-5. In TestFlight, open Nightwatch and turn off Automatic Updates.
-6. Turn off Developer Mode, restart, and confirm that Nightwatch opens.
+4. Install electrs-watch over the existing copy. Don't delete the old one first.
+5. In TestFlight, open electrs-watch and turn off Automatic Updates.
+6. Turn off Developer Mode, restart, and confirm that electrs-watch opens.
 
 ## Ongoing
 

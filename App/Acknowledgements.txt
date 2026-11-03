@@ -1,4 +1,4 @@
-Nightwatch includes the following open source software. Thank you to everyone who built it.
+electrs-watch includes the following open source software. Thank you to everyone who built it.
 
 ================================================================
 Tor.framework (iCepa)
