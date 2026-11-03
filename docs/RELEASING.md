@@ -34,8 +34,13 @@ download the `.p8` file, which Apple only offers once.
 
 ### 3. Create the certificate
 
-In Xcode, go to Settings, Accounts, Manage Certificates. Add an **Apple Distribution** certificate. Then right-click it, choose Export Certificate, save
-`distribution.p12`, and choose a strong password.
+In Xcode, go to Settings, Apple Accounts (called Accounts in older versions). Select your Apple ID, select your team, then choose Manage Certificates.
+Add an **Apple Distribution** certificate. Then right-click it, choose Export Certificate, save `distribution.p12`, and choose a strong password.
+
+If Xcode doesn't offer Manage Certificates, use Keychain Access instead. Choose Keychain Access, Certificate Assistant, Request a Certificate From a
+Certificate Authority, and save the request to disk. Upload it on [Apple's Certificates page](https://developer.apple.com/account/resources/certificates/add)
+as an **Apple Distribution** certificate, then download it and double-click it. In Keychain Access, under My Certificates, right-click "Apple Distribution:
+..." and choose Export to save `distribution.p12`.
 
 ### 4. Create the profile
 
