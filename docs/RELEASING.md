@@ -44,7 +44,7 @@ On [Apple's Profiles page](https://developer.apple.com/account/resources/profile
 
 ### 5. Store the secrets
 
-From this repo, using your own file paths. `gh secret set` prompts for values, so they stay out of your shell history. The secrets go in the `testflight` environment, not the repo, so only an owner-approved run from `main` can read them (see `docs/OPEN-SOURCE.md`). Create the environment first, as described there.
+From this repo, using your own file paths. `gh secret set` prompts for values, so they stay out of your shell history. The secrets go in the `testflight` environment, not the repo, so only an owner-approved run from `main` can read them. Create the environment first (`docs/OPEN-SOURCE.md`, section 2). GitHub only offers environment secrets on public repos, unless the account has GitHub Pro, so make the repo public before this step.
 
 ```sh
 base64 -i distribution.p12 | gh secret set APPLE_DISTRIBUTION_P12 --env testflight
@@ -64,6 +64,8 @@ Then delete `distribution.p12` and the `.p8` from your Mac. If you ever need the
 gh workflow run testflight.yml
 gh run watch
 ```
+
+The run waits for your approval before it can read the secrets: open it under the repo's Actions tab and choose Review deployments, then Approve.
 
 ### 7. Set up TestFlight
 
