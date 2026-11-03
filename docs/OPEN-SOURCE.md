@@ -76,7 +76,7 @@ the `testflight` environment as in `docs/RELEASING.md`, step 5.
 |---|---|
 | Name | The display name has to be unique on the App Store. Check "electrs-watch" is free when creating the app record. The home screen shows the same name, which hints at Bitcoin to anyone who sees the phone; that was chosen knowingly |
 | Privacy | Privacy policy URL: `PRIVACY.md` on GitHub. App Privacy answer: Data Not Collected |
-| Encryption export | The app includes Tor, so `ITSAppUsesNonExemptEncryption` is `YES`. App Store Connect asks follow-up questions; publicly available open source encryption usually qualifies for an exemption, but check Apple's export compliance guidance and answer for yourself |
+| Encryption export | The app includes Tor, which uses standard, publicly available open source encryption. App Store Connect's export compliance questions found that it needs no documentation, so `ITSAppUsesNonExemptEncryption` is `NO`. Declaring `YES` without an `ITSEncryptionExportComplianceCode` makes uploads fail with error 90592. Revisit this if the app adds other encryption |
 | App Review access | Reviewers can't reach your node or authorize a key on it. Decide between a review-only demo server (an onion service with mock data and no client authorization) and a clearly labeled demo mode inside the app |
 | Crypto rules | Guideline 3.1.5 limits wallets to organization accounts. This app holds no keys and can't move coins; say so plainly in the review notes |
 | Listing | Category Finance, age rating 4+, screenshots, description, support URL (the GitHub issues page) |
