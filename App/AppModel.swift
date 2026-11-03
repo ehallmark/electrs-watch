@@ -21,9 +21,13 @@ final class AppModel {
     }
 
     private(set) var vault: VaultContents?
+    /// Demo mode: sample data held in memory only. It has no server address, so nothing can start
+    /// Tor or connect, and it never reads or writes the Keychain. Locking ends it.
+    private(set) var isDemo = false
     private(set) var vaultExists = false
     private(set) var snapshot: WalletSnapshot?
-    /// False while `snapshot` is a saved copy, or while a newer one is being fetched or failed to arrive.
+    /// False while `snapshot` is an older saved copy, or while a newer one is being fetched or failed to arrive.
+    /// A copy saved in the last 10 minutes counts as current, so opening the app doesn't fetch again.
     private(set) var balanceIsCurrent = false
     private(set) var activity: Activity = .idle
     private(set) var failure: Failure?
@@ -53,6 +57,16 @@ final class AppModel {
     private(set) var hardRefreshTaps = 0
     /// Goes up on every lock, so work that finishes afterward can tell it's stale and drop its results.
     private var session = 0
+
+    /// Address pages. Saved in their own Face ID protected Keychain item, loaded on unlock, and
+    /// dropped from memory on lock.
+    private var historyCache = HistoryCache()
+    var histories: [String: AddressHistory] { historyCache.histories }
+    private(set) var historyLoading: Set<String> = []
+    private var historyTasks: [String: Task<Void, Never>] = [:]
+    private(set) var historyFailures: [String: Failure] = [:]
+    /// Whether a server connection is open, so an address page can load as soon as one is.
+    var isConnected: Bool { client != nil }
 
     init() {
         vaultExists = store.exists()
@@ -91,16 +105,23 @@ final class AppModel {
         do {
             // Blocks during the Face ID prompt, so it can't run on the main thread.
             let box = ContextBox(context)
-            let contents = try await Task.detached { try store.load(context: box.context) }.value
+            let (contents, cache) = try await Task.detached {
+                let contents = try store.load(context: box.context)
+                return (contents, store.loadHistory(context: box.context))
+            }.value
             guard self.session == session else {
                 context.invalidate()
                 return
             }
             vault = contents
+            historyCache = cache
+            historyCache.keep(contents.watched)
             snapshot = contents.lastSnapshot?.keeping(contents.watched)
-            balanceIsCurrent = false
+            // Going back and forth between apps shouldn't reconnect each time. Refresh still works on request.
+            let fresh = contents.lastSnapshot?.isFresh(for: contents.watched, within: Self.freshSeconds) ?? false
+            balanceIsCurrent = fresh
             // Right after Tor resumes, the first connection to the service can fail briefly.
-            if !contents.watched.isEmpty { refresh(retries: 6) }
+            if !contents.watched.isEmpty, !fresh { refresh(retries: 6) }
         } catch {
             guard self.session == session else { return }
             context.invalidate()
@@ -120,11 +141,13 @@ final class AppModel {
     }
 
     func setOnion(_ text: String) -> Bool {
-        guard var contents = vault, let onion = try? OnionAddress(text) else { return false }
+        guard !isDemo, var contents = vault, let onion = try? OnionAddress(text) else { return false }
         contents.onion = onion
         // Balances saved from the old server shouldn't appear as if they came from the new one.
         contents.lastSnapshot = nil
         guard persist(contents) else { return false }
+        historyCache = HistoryCache()
+        store.eraseHistory()
         client?.close()
         client = nil
         snapshot = nil
@@ -159,9 +182,16 @@ final class AppModel {
         if persist(contents) {
             snapshot = snapshot?.keeping(contents.watched)
         }
+        historyCache.keep(contents.watched)
+        saveHistories()
     }
 
     private func persist(_ contents: VaultContents) -> Bool {
+        // Demo changes, like a rename, last until the demo ends.
+        if isDemo {
+            vault = contents
+            return true
+        }
         guard let context, (try? store.save(contents, context: context)) != nil else {
             failure = Failure(message: "Couldn't save. Try locking and unlocking the app.")
             return false
@@ -175,7 +205,7 @@ final class AppModel {
         guard var contents = vault else { return }
         contents.connectionLog.record(outcome)
         vault = contents
-        if let context { try? store.save(contents, context: context) }
+        if !isDemo, let context { try? store.save(contents, context: context) }
     }
 
     /// Runs on leaving the foreground and on request. Everything sensitive leaves app state here.
@@ -214,7 +244,31 @@ final class AppModel {
         offerErase = false
         activity = .idle
         hideAmounts = false
+        isDemo = false
+        historyCache = HistoryCache()
+        historyTasks.values.forEach { $0.cancel() }
+        historyTasks = [:]
+        historyLoading = []
+        historyFailures = [:]
         vaultExists = store.exists()
+    }
+
+    /// Only from the welcome screen, so it can't run alongside a real setup.
+    func startDemo() {
+        guard !vaultExists, vault == nil else { return }
+        let demo = DemoData.make()
+        var contents = VaultContents(clientKey: .generate(), onion: nil, watched: demo.watched)
+        contents.lastSnapshot = nil
+        isDemo = true
+        vault = contents
+        snapshot = demo.snapshot
+        balanceIsCurrent = true
+        historyCache = HistoryCache()
+        demo.histories.forEach { historyCache.store($0) }
+    }
+
+    func exitDemo() {
+        lock()
     }
 
     func eraseEverything() {
@@ -274,6 +328,9 @@ final class AppModel {
                 guard self.failure != nil else { break }
                 if ConnectionRetry.isStall(attemptSeconds: Date().timeIntervalSince(attemptStartedAt)) {
                     self.needsNetworkReset = true
+                    // Also what Hard Refresh does. After a server goes quiet, Tor can keep using stale
+                    // details about how to reach it, and only a fresh copy of the service's info clears them.
+                    self.needsDescriptorRefresh = true
                 }
                 guard ConnectionRetry.shouldRetry(retriesLeft: retriesLeft, elapsedSeconds: Date().timeIntervalSince(startedAt)) else { break }
                 retriesLeft -= 1
@@ -287,6 +344,65 @@ final class AppModel {
             self.activity = .idle
             self.isHardRefresh = false
         }
+    }
+
+    /// Fetches one address's transactions over the open connection. It shares the connection with
+    /// refreshes, which the client keeps in order. Doesn't connect by itself: the page asks for a
+    /// refresh when there's no connection, and calls this again once there is.
+    ///
+    /// The load belongs to the model, not the page, so the page redrawing can't cancel it halfway.
+    /// Only a lock does. Returns the load in progress, so pull to refresh can wait for it.
+    @discardableResult
+    func loadHistory(for item: WatchedAddress) -> Task<Void, Never>? {
+        if let running = historyTasks[item.address] { return running }
+        guard let client, let onion = vault?.onion, let address = try? BitcoinAddress(item.address) else { return nil }
+        let session = session
+        historyLoading.insert(item.address)
+        historyFailures[item.address] = nil
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.fetchHistory(item: item, address: address, client: client, onion: onion, session: session)
+        }
+        historyTasks[item.address] = task
+        return task
+    }
+
+    private func fetchHistory(item: WatchedAddress, address: BitcoinAddress, client: ElectrumClient, onion: OnionAddress, session: Int) async {
+        defer {
+            // After a lock, `lock()` has already cleared these, and a newer load may own them.
+            if self.session == session {
+                historyLoading.remove(item.address)
+                historyTasks[item.address] = nil
+            }
+        }
+        do {
+            let history = try await client.addressHistory(of: address)
+            guard self.session == session, vault?.onion == onion,
+                  vault?.watched.contains(where: { $0.address == item.address }) == true else { return }
+            historyCache.store(history)
+            saveHistories()
+        } catch {
+            guard self.session == session, !(error is CancellationError) else { return }
+            switch error {
+            case ElectrumError.serverError:
+                historyFailures[item.address] = Failure(message: "Your server reported an error. It may still be syncing.")
+            case is ElectrumError:
+                historyFailures[item.address] = Failure(message: "Your server sent transaction data that didn't add up, so it was ignored. Check the node if this continues.")
+            default:
+                historyFailures[item.address] = Failure(message: "The connection dropped while loading. Pull down to try again.")
+            }
+            // A failed call leaves the connection unusable, so the next refresh opens a new one.
+            if self.client === client {
+                client.close()
+                self.client = nil
+            }
+        }
+    }
+
+    /// A failed save only means the page is fetched again next time, so it isn't reported.
+    private func saveHistories() {
+        guard !isDemo, let context else { return }
+        try? store.saveHistory(historyCache, context: context)
     }
 
     private func runRefresh(session: Int, onion: OnionAddress, key: ClientAuthKey, watched: [WatchedAddress]) async {
@@ -401,6 +517,15 @@ final class AppModel {
             "Couldn't connect. Try again."
         }
     }
+
+    /// The E2E test sets this to 0 in the simulator, so it can test a stalled open soon after a refresh.
+    /// Phone builds always use 10 minutes.
+    private static let freshSeconds: TimeInterval = {
+#if targetEnvironment(simulator)
+        if let text = ProcessInfo.processInfo.environment["EW_FRESH_SECONDS"], let seconds = TimeInterval(text) { return seconds }
+#endif
+        return WalletSnapshot.freshSeconds
+    }()
 
     private static func biometryAvailable() -> Bool {
         var error: NSError?

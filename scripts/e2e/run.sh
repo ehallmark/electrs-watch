@@ -129,8 +129,14 @@ echo "PASS: no onion address, watched address or key files in the app container"
 echo 1 > "$work/inspected.flag"
 
 wait_for resumed.flag 600
-echo "PASS: locked on background, showed the saved balance after unlock, refreshed on open"
+# The address page has been saved by now, and it must only be in the Keychain.
+saved_txid=5f687d4a0b03c7ec9b2733df3d61e0d4bc3a7d1a0f77b06a0969a384379eed98
+if grep -rlq "$saved_txid" "$container" 2>/dev/null; then
+  fail "transaction data found in app files: $(grep -rl "$saved_txid" "$container" | head -3)"
+fi
+echo "PASS: locked on background, showed the saved balance after unlock, skipped a refresh within 10 minutes, showed saved transactions, refreshed on tap, no transaction data in files"
 cp "$work/saved.png" "$results/saved.png" 2>/dev/null || true
+cp "$work/demo.png" "$work/detail.png" "$work/detail-tx.png" "$work/light.png" "$results/" 2>/dev/null || true
 
 echo "==> Freezing the service so the next open stalls"
 kill -STOP "$tor_pid"
@@ -149,7 +155,7 @@ test_pid=""
 [ "$test_status" -eq 0 ] || fail "UI test failed, see $results/xcodebuild.log"
 echo "PASS: UI test"
 
-unexpected="$(awk '{print $1}' "$work/methods.log" | sort -u | grep -vxE 'server\.version|blockchain\.headers\.subscribe|blockchain\.scripthash\.subscribe|blockchain\.scripthash\.get_balance|blockchain\.scripthash\.get_history' || true)"
+unexpected="$(awk '{print $1}' "$work/methods.log" | sort -u | grep -vxE 'server\.version|blockchain\.headers\.subscribe|blockchain\.scripthash\.subscribe|blockchain\.scripthash\.get_balance|blockchain\.scripthash\.get_history|blockchain\.transaction\.get|blockchain\.block\.header' || true)"
 [ -z "$unexpected" ] || fail "app sent other methods: $unexpected"
 echo "PASS: only allowlisted Electrum methods ($(wc -l < "$work/methods.log" | tr -d ' ') calls)"
 echo "ALL E2E CHECKS PASSED"

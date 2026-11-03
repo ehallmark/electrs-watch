@@ -8,23 +8,19 @@ Reply shapes follow electrs 0.12.0 src/electrum.rs. This is not a substitute for
 import asyncio
 import hashlib
 import json
+import os
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from txfixtures import HEADERS, HISTORY, LEGACY, SEGWIT, TRANSACTIONS
 
 def scripthash(script_hex):
     return hashlib.sha256(bytes.fromhex(script_hex)).digest()[::-1].hex()
 
-TX = "ab" * 32
+# Balances agree with the transactions, which the app checks.
 WALLET = {
-    # 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa
-    scripthash("76a91462e907b15cbf27d5425399ebf6f0fb50ebb88f1888ac"): (
-        {"confirmed": 123456789, "unconfirmed": 0},
-        [{"height": 700000, "tx_hash": TX}, {"height": 800000, "tx_hash": TX}],
-    ),
-    # bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4
-    scripthash("0014751e76e8199196d454941c45d1b3a323f1433bd6"): (
-        {"confirmed": 50000, "unconfirmed": -1000},
-        [{"height": 850000, "tx_hash": TX}, {"height": 0, "tx_hash": TX, "fee": 200}],
-    ),
+    scripthash(LEGACY): ({"confirmed": 123456789, "unconfirmed": 0}, HISTORY[LEGACY]),
+    scripthash(SEGWIT): ({"confirmed": 50000, "unconfirmed": -1000}, HISTORY[SEGWIT]),
 }
 log_path = sys.argv[2]
 
@@ -44,6 +40,11 @@ def handle(method, params, subscribed):
         return WALLET[params[0]][0]
     if method == "blockchain.scripthash.get_history":
         return WALLET[params[0]][1]
+    # Only the plain form: the app checks raw bytes against the ID and never asks for verbose output.
+    if method == "blockchain.transaction.get" and len(params) == 1:
+        return TRANSACTIONS[params[0]]
+    if method == "blockchain.block.header" and len(params) == 1:
+        return HEADERS[params[0]]
     raise ValueError("method not allowed")
 
 async def client(reader, writer):
@@ -51,7 +52,7 @@ async def client(reader, writer):
     while line := await reader.readline():
         request = json.loads(line)
         with open(log_path, "a") as log:
-            log.write(request["method"] + " " + ",".join(request["params"]) + "\n")
+            log.write(request["method"] + " " + ",".join(map(str, request["params"])) + "\n")
         reply = {"id": request["id"], "jsonrpc": "2.0"}
         try:
             reply["result"] = handle(request["method"], request["params"], subscribed)

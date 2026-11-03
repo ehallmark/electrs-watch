@@ -410,9 +410,221 @@ final class FakeStream: ByteStream, @unchecked Sendable {
     }
 
     @Test func onlyAllowedMethodsExist() {
-        let all: [ElectrumRequest] = [.version, .headersSubscribe, .subscribe(hash), .balance(hash), .history(hash)]
+        let all: [ElectrumRequest] = [.version, .headersSubscribe, .subscribe(hash), .balance(hash), .history(hash),
+                                      .transaction(try! TxID(String(repeating: "a", count: 64))), .blockHeader(1)]
         #expect(Set(all.map(\.method)) == ["server.version", "blockchain.headers.subscribe", "blockchain.scripthash.subscribe",
-                                           "blockchain.scripthash.get_balance", "blockchain.scripthash.get_history"])
+                                           "blockchain.scripthash.get_balance", "blockchain.scripthash.get_history",
+                                           "blockchain.transaction.get", "blockchain.block.header"])
+    }
+}
+
+/// Vectors from scripts/e2e/txfixtures.py, which builds and hashes them separately in Python.
+enum Fixtures {
+    static let legacy = try! BitcoinAddress("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
+    static let segwit = try! BitcoinAddress("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4")
+    static let a = ("3d9ece8f1cb762dbfa6c15af6610c79e745aa6b32adf0dd1cd7450cfbb5ac6da",
+                    "02000000011111111111111111111111111111111111111111111111111111111111111111000000000151ffffffff0200c2eb0b000000001976a91462e907b15cbf27d5425399ebf6f0fb50ebb88f1888ac881300000000000017a914e9c3dd0c07aac76179ebc76a6c78d4d67c6c160a8700000000")
+    static let b = ("c2f22e3a91faa4e3a488289d3d9a6ea9d7032e571d4ba724c8a9959d8a46e6c1",
+                    "0200000001dac65abbcf5074cdd10ddf2ab3a65a749ec71066af156cfadb62b71c8fce9e3d000000000151ffffffff02ebf48f040000000017a914e9c3dd0c07aac76179ebc76a6c78d4d67c6c160a8715cd5b07000000001976a91462e907b15cbf27d5425399ebf6f0fb50ebb88f1888ac00000000")
+    static let c = ("5f687d4a0b03c7ec9b2733df3d61e0d4bc3a7d1a0f77b06a0969a384379eed98",
+                    "02000000012222222222222222222222222222222222222222222222222222222222222222010000000151ffffffff0150c3000000000000160014751e76e8199196d454941c45d1b3a323f1433bd600000000")
+    /// SegWit serialization, so its ID has to leave out the witness.
+    static let d = ("907d70b0d7eaa44554d248d26589210088d403f21463c3135098635fabcd12bd",
+                    "0200000000010198ed9e3784a369096ab0770f1a7d3abcd4e0613ddf33279becc7030b4a7d685f000000000151ffffffff02e80300000000000017a914e9c3dd0c07aac76179ebc76a6c78d4d67c6c160a8768bf000000000000160014751e76e8199196d454941c45d1b3a323f1433bd602030102030000000000")
+    static let header700k = "0000002000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000282d3c61ffff001d00000000"
+
+    static func raw(_ pair: (String, String)) -> RawTransaction { try! RawTransaction(hex: pair.1) }
+    static func id(_ pair: (String, String)) -> TxID { try! TxID(pair.0) }
+}
+
+@Suite struct DemoDataTests {
+    @Test func sampleDataAddsUpLikeRealData() {
+        let demo = DemoData.make()
+        #expect(demo.watched.count == 3)
+        for (row, history) in zip(demo.snapshot.rows, demo.histories) {
+            #expect(row.watched.address == history.address)
+            #expect(history.balanceSats == row.balance.confirmedSats + row.balance.unconfirmedSats)
+            #expect(history.transactions.first?.balanceAfterSats == history.balanceSats)
+            #expect(history.receivedSats! - history.sentSats! == history.balanceSats)
+            #expect(HistoryCache.matches(history, row: row, tip: demo.snapshot.tip))
+            #expect(Set(history.transactions.map(\.txid)).count == history.transactions.count)
+        }
+        #expect(demo.snapshot.totalConfirmedSats == 85_000_000 + 9_850_000 + 2_660_000)
+        #expect(demo.snapshot.totalUnconfirmedSats == 500_000)
+    }
+}
+
+@Suite struct FreshnessTests {
+    let legacy = WatchedAddress(address: Fixtures.legacy, label: "a")
+    let segwit = WatchedAddress(address: Fixtures.segwit, label: "b")
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func snapshot(ageSeconds: TimeInterval, rows: [WatchedAddress]) -> WalletSnapshot {
+        WalletSnapshot(
+            tip: ChainTip(height: 1),
+            rows: rows.map { AddressStatus(watched: $0, balance: Balance(confirmedSats: 1, unconfirmedSats: 0),
+                                           history: HistorySummary(transactionCount: 1, pendingCount: 0, latestConfirmedHeight: 1)) },
+            fetchedAt: now.addingTimeInterval(-ageSeconds))
+    }
+
+    @Test func recentSnapshotIsFresh() {
+        #expect(snapshot(ageSeconds: 0, rows: [legacy]).isFresh(for: [legacy], now: now))
+        #expect(snapshot(ageSeconds: 599, rows: [legacy]).isFresh(for: [legacy], now: now))
+        // A renamed address still counts as covered.
+        var renamed = legacy
+        renamed.rename(to: "new")
+        #expect(snapshot(ageSeconds: 60, rows: [legacy]).isFresh(for: [renamed], now: now))
+    }
+
+    @Test func oldFutureOrIncompleteSnapshotIsNot() {
+        #expect(!snapshot(ageSeconds: 600, rows: [legacy]).isFresh(for: [legacy], now: now))
+        #expect(!snapshot(ageSeconds: -5, rows: [legacy]).isFresh(for: [legacy], now: now))
+        // An address added since has no balance yet.
+        #expect(!snapshot(ageSeconds: 60, rows: [legacy]).isFresh(for: [legacy, segwit], now: now))
+    }
+}
+
+@Suite struct TransactionTests {
+    @Test(arguments: [Fixtures.a, Fixtures.b, Fixtures.c, Fixtures.d])
+    func idsMatchIndependentHashes(pair: (String, String)) throws {
+        #expect(try RawTransaction(hex: pair.1).txid.hex == pair.0)
+    }
+
+    @Test func readsInputsAndOutputs() throws {
+        let d = Fixtures.raw(Fixtures.d)
+        #expect(d.inputs == [OutPoint(txid: Fixtures.id(Fixtures.c), index: 0)])
+        #expect(d.outputs.map(\.sats) == [1_000, 49_000])
+        #expect(d.outputs[1].script == Fixtures.segwit.scriptPubKey)
+    }
+
+    @Test func readsBlockTime() throws {
+        #expect(try BlockHeader.time(hex: Fixtures.header700k) == Date(timeIntervalSince1970: 1_631_333_672))
+    }
+
+    @Test(arguments: [
+        "", "0", "zz", "02000000",
+        // Trailing byte, missing lock time, no inputs
+        Fixtures.a.1 + "00", String(Fixtures.a.1.dropLast(8)), "020000000000000000000000",
+        // An input count far beyond what the bytes could hold
+        "02000000fe00ffffff",
+        // An output worth more than all bitcoin, and a negative one
+        "0200000001" + String(repeating: "11", count: 32) + "000000000151ffffffff01" + "ffffffffffffff7f" + "015100000000",
+        "0200000001" + String(repeating: "11", count: 32) + "000000000151ffffffff01" + "ffffffffffffffff" + "015100000000",
+    ])
+    func rejectsBadTransactions(hex: String) {
+        #expect(throws: ElectrumError.self) { try RawTransaction(hex: hex) }
+    }
+
+    @Test(arguments: ["00", String(repeating: "00", count: 80), String(repeating: "00", count: 81)])
+    func rejectsBadHeaders(hex: String) {
+        #expect(throws: ElectrumError.self) { try BlockHeader.time(hex: hex) }
+    }
+
+    @Test func rejectsBadIDs() {
+        for text in ["", String(repeating: "A", count: 64), String(repeating: "a", count: 63), String(repeating: "g", count: 64)] {
+            #expect(throws: ElectrumError.self) { try TxID(text) }
+        }
+    }
+}
+
+@Suite struct AddressHistoryTests {
+    let entries = [HistoryEntry(txid: Fixtures.id(Fixtures.a), height: 700000), HistoryEntry(txid: Fixtures.id(Fixtures.b), height: 800000)]
+    var all: [TxID: RawTransaction] { [Fixtures.id(Fixtures.a): Fixtures.raw(Fixtures.a), Fixtures.id(Fixtures.b): Fixtures.raw(Fixtures.b)] }
+
+    private func build(balance: Int64 = 123_456_789, entries: [HistoryEntry]? = nil, transactions: [TxID: RawTransaction]? = nil) throws -> AddressHistory {
+        try AddressHistory.build(address: Fixtures.legacy, tipHeight: 900000, balanceSats: balance, entries: entries ?? self.entries,
+                                 transactions: transactions ?? all, times: [700000: Date(timeIntervalSince1970: 1)], fetchedAt: Date())
+    }
+
+    @Test func netsAndRunningBalance() throws {
+        let history = try build()
+        #expect(history.transactions.map(\.txid) == [Fixtures.id(Fixtures.b), Fixtures.id(Fixtures.a)])
+        #expect(history.transactions.map(\.netSats) == [-76_543_211, 200_000_000])
+        #expect(history.transactions.map(\.balanceAfterSats) == [123_456_789, 200_000_000])
+        #expect(history.receivedSats == 200_000_000)
+        #expect(history.sentSats == 76_543_211)
+        #expect(history.transactions[1].time == Date(timeIntervalSince1970: 1))
+        #expect(history.transactions[0].confirmations(tip: 900000) == 100001)
+    }
+
+    @Test func pendingSpendWithWitness() throws {
+        let entries = [HistoryEntry(txid: Fixtures.id(Fixtures.d), height: 0), HistoryEntry(txid: Fixtures.id(Fixtures.c), height: 850000)]
+        let history = try AddressHistory.build(
+            address: Fixtures.segwit, tipHeight: 900000, balanceSats: 49_000, entries: entries,
+            transactions: [Fixtures.id(Fixtures.c): Fixtures.raw(Fixtures.c), Fixtures.id(Fixtures.d): Fixtures.raw(Fixtures.d)],
+            times: [:], fetchedAt: Date())
+        // Pending goes newest, whatever order the server listed it in.
+        #expect(history.transactions.map(\.netSats) == [-1_000, 50_000])
+        #expect(history.transactions[0].isPending)
+        #expect(history.transactions[0].confirmations(tip: 900000) == 0)
+    }
+
+    @Test func balanceThatDisagreesWithTransactionsIsRefused() {
+        #expect(throws: ElectrumError.implausibleValue) { try build(balance: 123_456_788) }
+        #expect(throws: ElectrumError.implausibleValue) { try build(balance: 5, entries: [], transactions: [:]) }
+    }
+
+    @Test func missingParentLeavesAmountUnknown() throws {
+        let history = try build(transactions: [Fixtures.id(Fixtures.b): Fixtures.raw(Fixtures.b)])
+        #expect(history.transactions.map(\.netSats) == [nil, nil])
+        #expect(history.transactions[0].balanceAfterSats == 123_456_789)
+        #expect(history.transactions[1].balanceAfterSats == nil)
+        #expect(history.receivedSats == nil)
+    }
+
+    @Test func cacheRoundTripsAndStaysSmall() throws {
+        var cache = HistoryCache()
+        cache.store(try build())
+        let decoded = try JSONDecoder().decode(HistoryCache.self, from: JSONEncoder().encode(cache))
+        #expect(decoded == cache)
+        // Oldest pages go first once over the limit.
+        for index in 0..<HistoryCache.maxAddresses {
+            let other = AddressHistory(address: "a\(index)", tipHeight: 1, balanceSats: 0, totalCount: 0, transactions: [],
+                                       fetchedAt: Date(timeIntervalSinceNow: Double(index + 1)))
+            cache.store(other)
+        }
+        #expect(cache.histories.count == HistoryCache.maxAddresses)
+        #expect(cache.histories[Fixtures.legacy.text] == nil)
+        cache.keep([WatchedAddress(address: Fixtures.legacy, label: "")])
+        #expect(cache.histories.isEmpty)
+    }
+
+    @Test func clientChecksEachTransactionAgainstItsID() async {
+        // The server answers with A when asked for B.
+        let stream = FakeStream(lines: [#"{"id":1,"result":"\#(Fixtures.a.1)"}"#])
+        await #expect(throws: ElectrumError.implausibleValue) {
+            _ = try await ElectrumClient(stream: stream).transactions([Fixtures.id(Fixtures.b)])
+        }
+    }
+
+    @Test func batchedRepliesMayArriveInAnyOrder() async throws {
+        let stream = FakeStream(lines: [#"{"id":2,"result":"\#(Fixtures.b.1)"}"#, #"{"id":1,"result":"\#(Fixtures.a.1)"}"#])
+        let fetched = try await ElectrumClient(stream: stream).transactions([Fixtures.id(Fixtures.a), Fixtures.id(Fixtures.b)])
+        #expect(fetched.count == 2)
+        // Both requests go out before any reply is read.
+        #expect(stream.sent.split(separator: "\n").count == 2)
+        #expect(stream.sent.contains(#""method":"blockchain.transaction.get","params":["\#(Fixtures.a.0)"]"#))
+    }
+
+    @Test func duplicateReplyIsRefused() async {
+        let stream = FakeStream(lines: [#"{"id":1,"result":"\#(Fixtures.a.1)"}"#, #"{"id":1,"result":"\#(Fixtures.a.1)"}"#])
+        await #expect(throws: ElectrumError.unexpectedReplyID) {
+            _ = try await ElectrumClient(stream: stream).transactions([Fixtures.id(Fixtures.a), Fixtures.id(Fixtures.b)])
+        }
+    }
+
+    @Test func aFailedCallEndsTheConnection() async {
+        let stream = FakeStream(lines: [#"{"id":5,"result":null}"#, #"{"id":2,"result":null}"#])
+        let client = ElectrumClient(stream: stream)
+        await #expect(throws: ElectrumError.unexpectedReplyID) { try await client.subscribe(to: Fixtures.legacy.scriptHash) }
+        await #expect(throws: StreamError.closed) { try await client.subscribe(to: Fixtures.legacy.scriptHash) }
+    }
+
+    @Test func headerRequestSendsTheHeightAsANumber() async throws {
+        let stream = FakeStream(lines: [#"{"id":1,"result":"\#(Fixtures.header700k)"}"#])
+        let times = try await ElectrumClient(stream: stream).blockTimes([700000])
+        #expect(times[700000] == Date(timeIntervalSince1970: 1_631_333_672))
+        #expect(stream.sent.contains(#""method":"blockchain.block.header","params":[700000]"#))
     }
 }
 

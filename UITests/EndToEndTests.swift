@@ -75,7 +75,22 @@ final class EndToEndTests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
 
-        // First run: generate a key.
+        // DEMO: sample data, clearly labeled, with no refresh and nothing kept after exiting.
+        XCTAssertTrue(element(app, "setup.demo").waitForExistence(timeout: 30))
+        element(app, "setup.demo").tap()
+        XCTAssertTrue(element(app, "demo.badge").waitForExistence(timeout: 10), "Demo wasn't labeled")
+        XCTAssertEqual(element(app, "home.total").label, "0.97510000 BTC")
+        XCTAssertFalse(element(app, "home.refresh").exists, "Demo offered to connect")
+        XCTAssertFalse(element(app, "home.hardRefresh").exists, "Demo offered to connect")
+        element(app, "row.Savings").tap()
+        XCTAssertTrue(element(app, "detail.tx.0.amount").waitForExistence(timeout: 5), "Demo address page empty")
+        XCTAssertEqual(element(app, "detail.tx.0.amount").label, "+0.00500000 BTC")
+        XCTAssertTrue(element(app, "demo.badge").exists, "Demo address page wasn't labeled")
+        try XCUIScreen.main.screenshot().pngRepresentation.write(to: try directory.appendingPathComponent("demo.png"))
+        app.navigationBars["Savings"].buttons.firstMatch.tap()
+        element(app, "demo.exit").tap()
+
+        // First run: generate a key. Back at the welcome screen means the demo saved nothing.
         XCTAssertTrue(element(app, "setup.start").waitForExistence(timeout: 30))
         element(app, "setup.start").tap()
         allowSystemAlert()
@@ -150,19 +165,54 @@ final class EndToEndTests: XCTestCase {
         let sats = app.buttons["sats"]
         XCTAssertTrue(sats.waitForExistence(timeout: 10))
         sats.tap()
+        // Light mode can be chosen, for a screenshot of how it looks, then back to the default.
+        app.buttons["Light"].tap()
+        app.buttons["Done"].tap()
+        XCTAssertTrue(element(app, "home.total").waitForExistence(timeout: 10))
+        try XCUIScreen.main.screenshot().pngRepresentation.write(to: try directory.appendingPathComponent("light.png"))
+        element(app, "home.settings").tap()
+        XCTAssertTrue(app.buttons["Dark"].waitForExistence(timeout: 10), "No appearance setting")
+        app.buttons["Dark"].tap()
         app.buttons["Done"].tap()
         XCTAssertTrue(element(app, "home.total").waitForExistence(timeout: 10))
         XCTAssertEqual(element(app, "home.total").label, expectedTotalInSats)
         XCTAssertEqual(element(app, "home.pending").label, "Pending -1,000 sats")
         XCTAssertEqual(element(app, "row.segwit").label, "50,000 sats, 2 tx")
 
-        // Renaming changes the label and keeps the balance.
+        // The address page works out each transaction's amount from the raw transactions.
         element(app, "row.segwit").tap()
+        XCTAssertTrue(element(app, "detail.balance").waitForExistence(timeout: 10), "Tapping an address didn't open its page")
+        XCTAssertEqual(element(app, "detail.balance").label, "50,000 sats")
+        XCTAssertEqual(element(app, "detail.pending").label, "Pending -1,000 sats")
+        let newest = element(app, "detail.tx.0.amount")
+        XCTAssertTrue(newest.waitForExistence(timeout: 120), "Transactions didn't load: \(element(app, "detail.error").label)")
+        XCTAssertTrue(element(app, "detail.received").label.contains("50,000 sats"), "Received total wrong")
+        XCTAssertTrue(element(app, "detail.sent").label.contains("1,000 sats"), "Sent total wrong")
+        XCTAssertTrue(element(app, "detail.chart").exists, "No balance chart")
+        try XCUIScreen.main.screenshot().pngRepresentation.write(to: try directory.appendingPathComponent("detail.png"))
+        // Newest first: the pending spend, then the payment it spends. The list only draws rows on screen.
+        XCTAssertEqual(newest.label, "-1,000 sats")
+        XCTAssertEqual(element(app, "detail.tx.0.balance").label, "Balance after, 49,000 sats")
+        app.swipeUp()
+        XCTAssertTrue(element(app, "detail.tx.1.amount").waitForExistence(timeout: 5), "Older transaction missing")
+        XCTAssertEqual(element(app, "detail.tx.1.amount").label, "+50,000 sats")
+        XCTAssertEqual(element(app, "detail.tx.1.balance").label, "Balance after, 50,000 sats")
+        // Tapping a transaction shows its ID, which the app checked against the raw bytes.
+        element(app, "detail.tx.1.amount").tap()
+        let txid = element(app, "detail.tx.1.id")
+        XCTAssertTrue(txid.waitForExistence(timeout: 5), "Tapping a transaction didn't show its details")
+        XCTAssertEqual(txid.label, "5f687d4a0b03c7ec9b2733df3d61e0d4bc3a7d1a0f77b06a0969a384379eed98")
+        try XCUIScreen.main.screenshot().pngRepresentation.write(to: try directory.appendingPathComponent("detail-tx.png"))
+
+        // Renaming from the page changes the label and keeps the balance.
+        element(app, "detail.edit").tap()
         let renameField = element(app, "rename.label")
-        XCTAssertTrue(renameField.waitForExistence(timeout: 10), "Tapping an address didn't offer a rename")
+        XCTAssertTrue(renameField.waitForExistence(timeout: 10), "The page didn't offer a rename")
         renameField.tap()
         renameField.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "segwit".count) + "cold")
         element(app, "rename.save").tap()
+        XCTAssertTrue(app.navigationBars["cold"].waitForExistence(timeout: 10), "The page title didn't change")
+        app.navigationBars["cold"].buttons.firstMatch.tap()
         XCTAssertTrue(element(app, "row.cold").waitForExistence(timeout: 10), "Rename didn't apply")
         XCTAssertEqual(element(app, "row.cold").label, "50,000 sats, 2 tx")
         XCTAssertEqual(element(app, "home.total").label, expectedTotalInSats)
@@ -175,29 +225,56 @@ final class EndToEndTests: XCTestCase {
         XCTAssertFalse(element(app, "home.total").exists, "Balance visible while locked")
         element(app, "lock.unlock").tap()
 
-        // Opening shows the saved balance, in the saved unit, clearly marked, and refreshes without a tap.
+        // Opening within 10 minutes of a refresh shows the saved balance, in the saved unit, as current,
+        // and doesn't reconnect.
         XCTAssertTrue(element(app, "home.total").waitForExistence(timeout: 60), "Saved balance not shown after unlock")
         XCTAssertEqual(element(app, "home.total").label, expectedTotalInSats)
-        XCTAssertTrue(element(app, "home.stale").waitForExistence(timeout: 5), "Saved balance wasn't labeled")
-        XCTAssertTrue(element(app, "home.activity").waitForExistence(timeout: 5), "Refresh didn't start on open")
+        Thread.sleep(forTimeInterval: 3)
+        XCTAssertFalse(element(app, "home.activity").exists, "Refreshed again right after a recent refresh")
+        XCTAssertFalse(element(app, "home.stale").exists, "A balance from minutes ago was labeled as old")
         try XCUIScreen.main.screenshot().pngRepresentation.write(to: try directory.appendingPathComponent("saved.png"))
 
-        // Tor resumes in the same process. Retries only if the automatic attempt fails.
-        XCTAssertTrue(refreshUntil(app, timeout: 300) { !element(app, "home.stale").exists }, "Did not reconnect after unlock")
+        // The address page was saved behind Face ID, so it shows right away without connecting.
+        element(app, "row.cold").tap()
+        let savedTx = element(app, "detail.tx.0.amount")
+        XCTAssertTrue(savedTx.waitForExistence(timeout: 5), "Saved transactions weren't shown after unlock")
+        XCTAssertEqual(savedTx.label, "-1,000 sats")
+        XCTAssertFalse(element(app, "detail.loading").exists, "Fetched a page that was saved")
+        app.navigationBars["cold"].buttons.firstMatch.tap()
+        XCTAssertTrue(element(app, "home.refresh").waitForExistence(timeout: 10))
+        XCTAssertFalse(element(app, "home.activity").exists, "Opening a saved page connected")
+
+        // A tap still refreshes, with Tor resuming in the same process.
+        element(app, "home.refresh").tap()
+        XCTAssertTrue(element(app, "home.stale").waitForExistence(timeout: 5), "Tapping Refresh didn't start one")
+        XCTAssertTrue(refreshUntil(app, timeout: 300) {
+            !element(app, "home.activity").exists && !element(app, "home.stale").exists && !element(app, "home.error").exists
+        }, "Did not reconnect after unlock")
         XCTAssertEqual(element(app, "home.total").label, expectedTotalInSats)
         XCTAssertEqual(element(app, "row.cold").label, "50,000 sats, 2 tx", "The new label didn't survive a lock and refresh")
         try signal("resumed.flag")
 
         // STALL: the harness freezes the service, so the next open gets stuck the way a phone can.
+        // Relaunched with no 10-minute window (simulator only), so opening refreshes again this soon.
         _ = try waitForFile("service-frozen.flag")
-        XCUIDevice.shared.press(.home)
-        Thread.sleep(forTimeInterval: 4)
-        app.activate()
-        XCTAssertTrue(element(app, "lock.unlock").waitForExistence(timeout: 20), "Did not lock on background")
+        app.terminate()
+        app.launchEnvironment["EW_FRESH_SECONDS"] = "0"
+        app.launch()
+        XCTAssertTrue(element(app, "lock.unlock").waitForExistence(timeout: 30), "Didn't open locked")
         element(app, "lock.unlock").tap()
         XCTAssertTrue(element(app, "home.activity").waitForExistence(timeout: 60), "Refresh didn't start on open")
         try signal("stall-started.flag")
+        // Open an address that's never been loaded while the connection is stuck. Its page has to load
+        // by itself once the app connects, even though the refresh changes the balances meanwhile.
+        element(app, "row.legacy").tap()
+        XCTAssertTrue(app.navigationBars["legacy"].waitForExistence(timeout: 10), "The address page didn't open")
         _ = try waitForFile("service-thawed.flag", timeout: 180)
+        let legacyTx = element(app, "detail.tx.0.amount")
+        XCTAssertTrue(legacyTx.waitForExistence(timeout: 300),
+                      "Page opened before connecting never loaded. Load button shown: \(element(app, "detail.load").exists)")
+        XCTAssertEqual(legacyTx.label, "-76,543,211 sats")
+        app.navigationBars["legacy"].buttons.firstMatch.tap()
+        XCTAssertTrue(element(app, "home.hardRefresh").waitForExistence(timeout: 10))
 
         // The app has to recover by itself, by resetting Tor between attempts, with no tap needed.
         let recovered = element(app, "home.stale")

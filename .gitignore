@@ -7,6 +7,7 @@ xcuserdata/
 *.xcuserstate
 *.xcresult
 Config/Signing.local.xcconfig
+Config/local.mk
 # Never commit real connection details or keys.
 *.auth
 *.auth_private

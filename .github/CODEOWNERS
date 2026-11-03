@@ -1,0 +1,6 @@
+# Every change needs the owner's review. Workflows and signing scripts are listed separately so
+# this stays true if the default line is ever loosened.
+*                       @ehallmark
+/.github/               @ehallmark
+/scripts/               @ehallmark
+/Vendor/                @ehallmark

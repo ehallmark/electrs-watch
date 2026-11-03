@@ -18,6 +18,8 @@ enum ElectrumRequest: Equatable {
     case subscribe(ScriptHash)
     case balance(ScriptHash)
     case history(ScriptHash)
+    case transaction(TxID)
+    case blockHeader(Int)
 
     var method: String {
         switch self {
@@ -26,14 +28,19 @@ enum ElectrumRequest: Equatable {
         case .subscribe: "blockchain.scripthash.subscribe"
         case .balance: "blockchain.scripthash.get_balance"
         case .history: "blockchain.scripthash.get_history"
+        case .transaction: "blockchain.transaction.get"
+        case .blockHeader: "blockchain.block.header"
         }
     }
 
-    var params: [String] {
+    var params: [Any] {
         switch self {
         case .version: ["electrs-watch", ElectrumClient.protocolVersion]
         case .headersSubscribe: []
         case .subscribe(let hash), .balance(let hash), .history(let hash): [hash.hex]
+        // Without the verbose flag, electrs returns the raw bytes, which the app checks against the ID.
+        case .transaction(let txid): [txid.hex]
+        case .blockHeader(let height): [height]
         }
     }
 }
@@ -59,11 +66,15 @@ public actor ElectrumClient {
     static let protocolVersion = "1.4"
     static let maxLineBytes = 4 * 1024 * 1024
     static let maxSkippedNotifications = 1_000
+    static let batchSize = 20
 
     private let stream: any ByteStream
     private let requestTimeout: TimeInterval
     private var buffer = Data()
     private var nextID = 1
+    private var busy = false
+    private var broken = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
 
     /// `requestTimeout` covers a whole call, so a server can't stall forever by sending slowly.
     public init(stream: any ByteStream, requestTimeout: TimeInterval = 60) {
@@ -130,14 +141,10 @@ public actor ElectrumClient {
     }
 
     public func history(of hash: ScriptHash) async throws -> HistorySummary {
-        struct Entry: Decodable { let height: Int; let tx_hash: String }
-        let entries: [Entry] = try await call(.history(hash))
+        let entries = try await historyEntries(of: hash)
         var latest: Int?
         var pending = 0
         for entry in entries {
-            guard Self.isLowercaseHash(entry.tx_hash), entry.height >= -1 else {
-                throw ElectrumError.implausibleValue
-            }
             if entry.height > 0 {
                 latest = max(latest ?? 0, entry.height)
             } else {
@@ -147,19 +154,103 @@ public actor ElectrumClient {
         return HistorySummary(transactionCount: entries.count, pendingCount: pending, latestConfirmedHeight: latest)
     }
 
-    // One request at a time: the app awaits each call, and a reply with any other ID is an error.
-    private func call<Result: Decodable>(_ request: ElectrumRequest) async throws -> Result {
-        let id = nextID
-        nextID += 1
-        var line = try JSONSerialization.data(withJSONObject: [
-            "id": id, "jsonrpc": "2.0", "method": request.method, "params": request.params,
-        ] as [String: Any], options: [.sortedKeys])
-        line.append(0x0A)
-        let deadline = Date().addingTimeInterval(requestTimeout)
-        try await stream.write(line, timeout: requestTimeout)
+    public func historyEntries(of hash: ScriptHash) async throws -> [HistoryEntry] {
+        struct Entry: Decodable { let height: Int; let tx_hash: String }
+        let entries: [Entry] = try await call(.history(hash))
+        return try entries.map { entry in
+            guard (-1...100_000_000).contains(entry.height) else { throw ElectrumError.implausibleValue }
+            return HistoryEntry(txid: try TxID(entry.tx_hash), height: entry.height)
+        }
+    }
 
+    /// Fetches transactions in batches, each checked against the ID it was asked for.
+    public func transactions(_ ids: [TxID]) async throws -> [TxID: RawTransaction] {
+        var result: [TxID: RawTransaction] = [:]
+        for start in stride(from: 0, to: ids.count, by: Self.batchSize) {
+            let batch = Array(ids[start..<min(ids.count, start + Self.batchSize)])
+            let replies: [String] = try await callAll(batch.map { .transaction($0) })
+            for (id, hex) in zip(batch, replies) {
+                let raw = try RawTransaction(hex: hex)
+                guard raw.txid == id else { throw ElectrumError.implausibleValue }
+                result[id] = raw
+            }
+        }
+        return result
+    }
+
+    /// Block times by height.
+    public func blockTimes(_ heights: [Int]) async throws -> [Int: Date] {
+        var result: [Int: Date] = [:]
+        for start in stride(from: 0, to: heights.count, by: Self.batchSize) {
+            let batch = Array(heights[start..<min(heights.count, start + Self.batchSize)])
+            let replies: [String] = try await callAll(batch.map { .blockHeader($0) })
+            for (height, hex) in zip(batch, replies) {
+                result[height] = try BlockHeader.time(hex: hex)
+            }
+        }
+        return result
+    }
+
+    /// Everything the address page shows. Read-only, like every other call.
+    public func addressHistory(of address: BitcoinAddress, now: Date = Date()) async throws -> AddressHistory {
+        let hash = address.scriptHash
+        let currentTip = try await tip()
+        try await subscribe(to: hash)
+        let balance = try await balance(of: hash)
+        let entries = try await historyEntries(of: hash)
+        guard Set(entries.map(\.txid)).count == entries.count else { throw ElectrumError.implausibleValue }
+        let shown = Array(AddressHistory.order(entries).suffix(AddressHistory.maxShown))
+        var fetched = try await transactions(shown.map(\.txid))
+        let parents = AddressHistory.neededParents(of: shown, fetched: fetched, history: entries)
+        fetched.merge(try await transactions(parents)) { first, _ in first }
+        let heights = Array(Set(shown.map(\.height).filter { $0 > 0 })).sorted()
+        let times = try await blockTimes(heights)
+        return try AddressHistory.build(
+            address: address,
+            tipHeight: currentTip.height,
+            balanceSats: balance.confirmedSats + balance.unconfirmedSats,
+            entries: entries,
+            transactions: fetched,
+            times: times,
+            fetchedAt: now
+        )
+    }
+
+    private func call<Result: Decodable>(_ request: ElectrumRequest) async throws -> Result {
+        let results: [Result] = try await callAll([request])
+        return results[0]
+    }
+
+    /// Sends several requests at once and matches the replies by ID, so a batch costs one round trip
+    /// over Tor instead of one per request. Each call has the connection to itself until it's done,
+    /// so a refresh and the address page can share a connection without mixing up replies.
+    private func callAll<Result: Decodable>(_ requests: [ElectrumRequest]) async throws -> [Result] {
+        guard !requests.isEmpty else { return [] }
+        await acquire()
+        defer { release() }
+        try Task.checkCancellation()
+        // Replies to a failed batch could still arrive and be taken for later ones, so this connection is done.
+        guard !broken else { throw StreamError.closed }
+        broken = true
+
+        var lines = Data()
+        var ids: [Int] = []
+        for request in requests {
+            let id = nextID
+            nextID += 1
+            ids.append(id)
+            lines += try JSONSerialization.data(withJSONObject: [
+                "id": id, "jsonrpc": "2.0", "method": request.method, "params": request.params,
+            ] as [String: Any], options: [.sortedKeys])
+            lines.append(0x0A)
+        }
+        let deadline = Date().addingTimeInterval(requestTimeout)
+        try await stream.write(lines, timeout: requestTimeout)
+
+        let pending = Set(ids)
+        var results: [Int: Result] = [:]
         var skipped = 0
-        while true {
+        while results.count < ids.count {
             let reply = try await readLine(deadline: deadline)
             guard let envelope = try? JSONDecoder().decode(Envelope.self, from: reply) else {
                 throw ElectrumError.malformedReply
@@ -169,7 +260,7 @@ public actor ElectrumClient {
                 guard skipped <= Self.maxSkippedNotifications else { throw ElectrumError.tooManyNotifications }
                 continue
             }
-            guard envelope.id == id else { throw ElectrumError.unexpectedReplyID }
+            guard let id = envelope.id, pending.contains(id), results[id] == nil else { throw ElectrumError.unexpectedReplyID }
             // Server error text is never shown or kept.
             if let failure = try? JSONDecoder().decode(ErrorEnvelope.self, from: reply), failure.error != nil {
                 throw ElectrumError.serverError
@@ -177,8 +268,22 @@ public actor ElectrumClient {
             guard let decoded = try? JSONDecoder().decode(ResultEnvelope<Result>.self, from: reply) else {
                 throw ElectrumError.malformedReply
             }
-            return decoded.result
+            results[id] = decoded.result
         }
+        broken = false
+        return ids.map { results[$0]! }
+    }
+
+    private func acquire() async {
+        while busy {
+            await withCheckedContinuation { waiters.append($0) }
+        }
+        busy = true
+    }
+
+    private func release() {
+        busy = false
+        if !waiters.isEmpty { waiters.removeFirst().resume() }
     }
 
     private func readLine(deadline: Date) async throws -> Data {

@@ -44,16 +44,16 @@ On [Apple's Profiles page](https://developer.apple.com/account/resources/profile
 
 ### 5. Store the secrets
 
-From this repo, using your own file paths. `gh secret set` prompts for values, so they stay out of your shell history.
+From this repo, using your own file paths. `gh secret set` prompts for values, so they stay out of your shell history. The secrets go in the `testflight` environment, not the repo, so only an owner-approved run from `main` can read them (see `docs/OPEN-SOURCE.md`). Create the environment first, as described there.
 
 ```sh
-base64 -i distribution.p12 | gh secret set APPLE_DISTRIBUTION_P12
-gh secret set APPLE_DISTRIBUTION_P12_PASSWORD
-base64 -i Nightwatch_TestFlight.mobileprovision | gh secret set TESTFLIGHT_PROFILE
-gh secret set ASC_KEY_P8 < AuthKey_XXXXXXXXXX.p8
-gh secret set ASC_KEY_ID
-gh secret set ASC_ISSUER_ID
-gh secret set APPLE_TEAM_ID
+base64 -i distribution.p12 | gh secret set APPLE_DISTRIBUTION_P12 --env testflight
+gh secret set APPLE_DISTRIBUTION_P12_PASSWORD --env testflight
+base64 -i Nightwatch_TestFlight.mobileprovision | gh secret set TESTFLIGHT_PROFILE --env testflight
+gh secret set ASC_KEY_P8 --env testflight < AuthKey_XXXXXXXXXX.p8
+gh secret set ASC_KEY_ID --env testflight
+gh secret set ASC_ISSUER_ID --env testflight
+gh secret set APPLE_TEAM_ID --env testflight
 ```
 
 Then delete `distribution.p12` and the `.p8` from your Mac. If you ever need them again, it's easier and safer to create new ones.

@@ -1,7 +1,6 @@
 # electrs-watch
 
-**Nightwatch** on the home screen, with a Night's Watch theme for personal use. The theme uses *Game of Thrones* references, so
-replace it before any public release. `electrs-watch` stays as the repo and project name, and the bundle ID doesn't change.
+**Nightwatch** on the home screen. `electrs-watch` stays as the repo and project name, and the bundle ID doesn't change.
 
 A small iPhone app that shows the balance of Bitcoin addresses you choose, using your own electrs
 server over a private Tor onion service.
@@ -24,6 +23,9 @@ goes to a new address that this app doesn't know about until you add it.
 | [docs/PLAN.md](docs/PLAN.md) | Milestones and current status |
 | [docs/NODE-SETUP.md](docs/NODE-SETUP.md) | Enabling the private electrs onion service and pairing a phone |
 | [Vendor/TorFramework/VENDORED.md](Vendor/TorFramework/VENDORED.md) | Where the Tor library comes from and how to update it |
+| [docs/OPEN-SOURCE.md](docs/OPEN-SOURCE.md) | Checklist for the public repo and the App Store |
+| [PRIVACY.md](PRIVACY.md) | Privacy policy: no data collected |
+| [CONTRIBUTING.md](CONTRIBUTING.md), [.github/SECURITY.md](.github/SECURITY.md) | How to contribute and how to report a vulnerability |
 
 ## Build and test
 
@@ -36,3 +38,8 @@ open ElectrsWatch.xcodeproj
 ```
 
 `scripts/e2e/run.sh` needs `brew install tor`. It only uses public test-vector addresses.
+
+## License
+
+MIT, see [LICENSE](LICENSE). The bundled Tor library and the libraries it includes keep their own licenses,
+listed in [App/Acknowledgements.txt](App/Acknowledgements.txt) and in the app under Settings.

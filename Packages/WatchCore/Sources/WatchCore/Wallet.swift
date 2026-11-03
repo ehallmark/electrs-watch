@@ -87,6 +87,16 @@ public struct WalletSnapshot: Codable, Sendable, Equatable {
         return WalletSnapshot(tip: tip, rows: rows.filter { addresses.contains($0.watched.address) }, fetchedAt: fetchedAt)
     }
 
+    /// Whether this is recent enough to show on opening without fetching again. Every watched address
+    /// has to be in it, and a time in the future (a changed clock) doesn't count as recent.
+    public func isFresh(for watched: [WatchedAddress], now: Date = Date(), within seconds: TimeInterval = WalletSnapshot.freshSeconds) -> Bool {
+        let age = now.timeIntervalSince(fetchedAt)
+        guard age >= 0, age < seconds else { return false }
+        return Set(watched.map(\.address)).isSubset(of: rows.map(\.watched.address))
+    }
+
+    public static let freshSeconds: TimeInterval = 10 * 60
+
     public var totalConfirmedSats: Int64 { rows.reduce(0) { $0 + $1.balance.confirmedSats } }
     public var totalUnconfirmedSats: Int64 { rows.reduce(0) { $0 + $1.balance.unconfirmedSats } }
 }

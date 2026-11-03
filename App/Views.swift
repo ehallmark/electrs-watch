@@ -18,7 +18,7 @@ struct PrivacyCover: View {
         ZStack {
             Color.black.ignoresSafeArea()
             VStack(spacing: 16) {
-                Crest()
+                Emblem()
                 Text(Theme.lockedLine).font(.headline).foregroundStyle(.secondary)
             }
         }
@@ -31,7 +31,7 @@ struct RootView: View {
 
     var body: some View {
         if let vault = model.vault {
-            if vault.onion == nil {
+            if vault.onion == nil, !model.isDemo {
                 PairingView(model: model, vault: vault)
             } else {
                 HomeView(model: model, vault: vault)
@@ -50,7 +50,7 @@ private struct WelcomeView: View {
     var body: some View {
         VStack(spacing: 20) {
             Spacer()
-            Crest()
+            Emblem()
             Text("Nightwatch").font(.largeTitle.bold())
             Text(Theme.tagline).font(.headline).italic().foregroundStyle(.secondary)
             Text("See the balance of addresses you choose, from your own server, over Tor. This app holds no wallet keys and can't spend.")
@@ -60,10 +60,17 @@ private struct WelcomeView: View {
                 Text(message).foregroundStyle(.red).multilineTextAlignment(.center).accessibilityIdentifier("setup.error")
             }
             Spacer()
-            Button("Take the Oath") { Task { await model.beginSetup() } }
+            Button("Get Started") { Task { await model.beginSetup() } }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .accessibilityIdentifier("setup.start")
+            Button("Try a Demo") { model.startDemo() }
+                .controlSize(.large)
+                .accessibilityIdentifier("setup.demo")
+            Text("The demo shows sample data, with no server and no connection.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
         }
         .padding(24)
     }
@@ -76,7 +83,7 @@ private struct LockedView: View {
     var body: some View {
         VStack(spacing: 20) {
             Spacer()
-            Crest()
+            Emblem()
             Text(Theme.lockedLine).font(.headline).italic().foregroundStyle(.secondary)
             if let message = model.unlockFailure {
                 Text(message).foregroundStyle(.red).multilineTextAlignment(.center).accessibilityIdentifier("lock.error")
@@ -147,16 +154,16 @@ private struct HomeView: View {
     let vault: VaultContents
     @State private var showAdd = false
     @State private var showSettings = false
-    @State private var renaming: WatchedAddress?
+    @State private var path: [String] = []
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             List {
                 totalSection
                 addressesSection
             }
             .privacySensitive()
-            .navigationTitle("The Watch")
+            .navigationTitle("Overview")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { showSettings = true } label: { Image(systemName: "gearshape") }
@@ -177,7 +184,7 @@ private struct HomeView: View {
             .safeAreaInset(edge: .bottom) { statusBar }
             .sheet(isPresented: $showAdd) { AddAddressView(model: model) }
             .sheet(isPresented: $showSettings) { SettingsView(model: model, vault: vault) }
-            .sheet(item: $renaming) { RenameAddressView(model: model, item: $0) }
+            .navigationDestination(for: String.self) { AddressDetailView(model: model, address: $0) }
         }
     }
 
@@ -202,6 +209,7 @@ private struct HomeView: View {
 
     private var totalSection: some View {
         Section {
+            if model.isDemo { DemoBadge(text: "Demo: sample data, not a real wallet") }
             if let snapshot = model.snapshot {
                 VStack(alignment: .leading, spacing: 4) {
                     if let staleText {
@@ -240,21 +248,27 @@ private struct HomeView: View {
         Section {
             ForEach(vault.watched) { item in
                 let row = model.snapshot?.rows.first { $0.id == item.id }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(item.label.isEmpty ? "Address" : item.label).font(.headline)
-                    Text(item.address).font(.caption2.monospaced()).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
-                    if let row {
-                        Text("\(amount(row.balance.confirmedSats)), \(row.history.transactionCount) tx")
-                            .font(.subheadline.monospacedDigit())
-                            .foregroundStyle(model.balanceIsCurrent ? .primary : .secondary)
-                            .accessibilityIdentifier("row.\(item.label)")
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(item.label.isEmpty ? "Address" : item.label).font(.headline)
+                        Text(item.address).font(.caption2.monospaced()).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
+                        if let row {
+                            Text("\(amount(row.balance.confirmedSats)), \(row.history.transactionCount) tx")
+                                .font(.subheadline.monospacedDigit())
+                                .foregroundStyle(model.balanceIsCurrent ? .primary : .secondary)
+                                .accessibilityIdentifier("row.\(item.label)")
+                        }
                     }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
                 }
-                // Not a Button, which would merge the row's text into one accessibility element.
-                .frame(maxWidth: .infinity, alignment: .leading)
+                // Not a NavigationLink, which would merge the row's text into one accessibility element.
                 .contentShape(Rectangle())
-                .onTapGesture { renaming = item }
-                .accessibilityAction(named: "Rename") { renaming = item }
+                .onTapGesture { path.append(item.address) }
+                .accessibilityAction(named: "Open") { path.append(item.address) }
             }
             .onDelete { offsets in
                 offsets.map { vault.watched[$0] }.forEach(model.remove)
@@ -266,12 +280,32 @@ private struct HomeView: View {
             Text("Addresses")
         } footer: {
             if !vault.watched.isEmpty {
-                Text("Tap an address to rename it. Swipe left to remove it.")
+                Text("Tap an address for its activity and to rename it. Swipe left to remove it.")
             }
         }
     }
 
+    @ViewBuilder
     private var statusBar: some View {
+        if model.isDemo {
+            VStack(spacing: 8) {
+                Text("This is a demo with made-up balances. Nothing connects anywhere.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                Button("Exit Demo") { model.exitDemo() }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("demo.exit")
+            }
+            .padding()
+            .frame(maxWidth: .infinity)
+            .background(.bar)
+        } else {
+            liveStatusBar
+        }
+    }
+
+    private var liveStatusBar: some View {
         VStack(spacing: 8) {
             if let failure = model.failure {
                 Text(failure.message)
@@ -393,7 +427,7 @@ private struct AddAddressView: View {
     }
 }
 
-private struct RenameAddressView: View {
+struct RenameAddressView: View {
     let model: AppModel
     let item: WatchedAddress
     @Environment(\.dismiss) private var dismiss
@@ -447,10 +481,19 @@ private struct SettingsView: View {
     @State private var confirmErase = false
     @State private var newOnion = ""
     @State private var onionInvalid = false
+    @AppStorage(Appearance.storageKey) private var appearance = Appearance.dark
 
     var body: some View {
         NavigationStack {
             Form {
+                Section("Appearance") {
+                    Picker("Appearance", selection: $appearance) {
+                        ForEach(Appearance.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .accessibilityIdentifier("settings.appearance")
+                }
                 Section("Show amounts in") {
                     Picker("Show amounts in", selection: Binding(get: { model.unit }, set: { model.setUnit($0) })) {
                         ForEach(AmountUnit.allCases, id: \.self) { Text($0.label).tag($0) }
@@ -459,25 +502,27 @@ private struct SettingsView: View {
                     .labelsHidden()
                     .accessibilityIdentifier("settings.unit")
                 }
-                Section("Server") {
-                    Text(vault.onion?.hostname ?? "").font(.footnote.monospaced())
-                    TextField("New onion address", text: $newOnion, axis: .vertical)
-                        .font(.footnote.monospaced())
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    if onionInvalid {
-                        Text("That isn't a v3 onion address.").foregroundStyle(.red)
+                if !model.isDemo {
+                    Section("Server") {
+                        Text(vault.onion?.hostname ?? "").font(.footnote.monospaced())
+                        TextField("New onion address", text: $newOnion, axis: .vertical)
+                            .font(.footnote.monospaced())
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        if onionInvalid {
+                            Text("That isn't a v3 onion address.").foregroundStyle(.red)
+                        }
+                        Button("Change Address") {
+                            onionInvalid = !model.setOnion(newOnion)
+                            if !onionInvalid { newOnion = "" }
+                        }
+                        .disabled(newOnion.isEmpty)
                     }
-                    Button("Change Address") {
-                        onionInvalid = !model.setOnion(newOnion)
-                        if !onionInvalid { newOnion = "" }
-                    }
-                    .disabled(newOnion.isEmpty)
-                }
-                Section("This phone's public key") {
-                    Text(vault.clientKey.authorizedClientLine).font(.footnote.monospaced()).textSelection(.enabled)
-                    ShareLink(item: vault.clientKey.authorizedClientLine) {
-                        Label("Send to Mac", systemImage: "square.and.arrow.up")
+                    Section("This phone's public key") {
+                        Text(vault.clientKey.authorizedClientLine).font(.footnote.monospaced()).textSelection(.enabled)
+                        ShareLink(item: vault.clientKey.authorizedClientLine) {
+                            Label("Send to Mac", systemImage: "square.and.arrow.up")
+                        }
                     }
                 }
                 Section {
@@ -495,8 +540,19 @@ private struct SettingsView: View {
                     Text("Counts only, with no addresses or times. Stays on this phone.")
                 }
                 Section {
+                    NavigationLink("Open Source Licenses") { AcknowledgementsView() }
+                        .accessibilityIdentifier("settings.licenses")
+                    LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
+                } header: {
+                    Text("About")
+                } footer: {
+                    Text("Nightwatch is open source under the MIT license.")
+                }
+                Section {
                     Button("Lock Now") { dismiss(); model.lock() }
-                    Button("Erase Everything", role: .destructive) { confirmErase = true }
+                    if !model.isDemo {
+                        Button("Erase Everything", role: .destructive) { confirmErase = true }
+                    }
                 } footer: {
                     Text("Erasing removes the key and your addresses from this phone. Your coins aren't affected. Also remove this phone's file from the node.")
                 }
@@ -511,5 +567,41 @@ private struct SettingsView: View {
             }
         }
         .modifier(PrivacyCovered())
+    }
+}
+
+/// Credits for the open source software inside the app, as their licenses require.
+private struct AcknowledgementsView: View {
+    private let text: String = {
+        guard let url = Bundle.main.url(forResource: "Acknowledgements", withExtension: "txt"),
+              let text = try? String(contentsOf: url, encoding: .utf8) else { return "" }
+        return text
+    }()
+
+    var body: some View {
+        ScrollView {
+            Text(text)
+                .font(.caption.monospaced())
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding()
+                .accessibilityIdentifier("licenses.text")
+        }
+        .navigationTitle("Licenses")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// Marks sample data on every screen of the demo.
+struct DemoBadge: View {
+    let text: String
+
+    var body: some View {
+        Label(text, systemImage: "theatermasks")
+            .font(.caption.weight(.semibold))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(Color.orange.opacity(0.18), in: Capsule())
+            .foregroundStyle(.orange)
+            .accessibilityIdentifier("demo.badge")
     }
 }
